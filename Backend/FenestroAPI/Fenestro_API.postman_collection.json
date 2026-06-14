@@ -1,0 +1,334 @@
+{
+  "info": {
+    "name": "Fenestro API",
+    "description": "Fenestro window/door measurement and lead referral platform API",
+    "_postman_id": "fenestro-api-v1",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://api.prestigeventures.co.in/api",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register (Referral Partner)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "register"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"John Doe\",\n  \"phone\": \"9876543210\",\n  \"company\": \"Acme Builders\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Submit referral partner registration. Status starts as 'pending' until Ops Manager approves. WhatsApp notification sent to Ops Manager."
+          },
+          "response": [
+            {
+              "name": "201 - Registration submitted",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"message\": \"Registration submitted successfully. You will be notified once approved.\"\n}"
+            },
+            {
+              "name": "422 - Validation error",
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "body": "{\n  \"message\": \"The phone field must be 10 digits.\",\n  \"errors\": {\n    \"phone\": [\"The phone field must be 10 digits.\"]\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Send OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/send-otp",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "send-otp"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"9876543210\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Request OTP for login. Works for both referral partners (must be approved) and admin. Dev bypass: OTP 123456 always works."
+          },
+          "response": [
+            {
+              "name": "200 - OTP sent",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"message\": \"OTP sent to your WhatsApp number.\"\n}"
+            },
+            {
+              "name": "403 - Pending approval",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"message\": \"Your registration is pending approval by the admin.\"\n}"
+            },
+            {
+              "name": "404 - Not registered",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"message\": \"Phone number not registered.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Verify OTP (Login)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.token) {",
+                  "  pm.collectionVariables.set('token', json.token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/verify-otp",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "verify-otp"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"9876543210\",\n  \"otp\": \"123456\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Verify OTP and receive bearer token. Token is auto-saved to {{token}} collection variable. Use OTP 123456 as bypass during development."
+          },
+          "response": [
+            {
+              "name": "200 - Login success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"token\": \"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...\",\n  \"token_type\": \"bearer\",\n  \"expires_in\": 3600,\n  \"user\": {\n    \"id\": 1,\n    \"name\": \"John Doe\",\n    \"phone\": \"9876543210\",\n    \"company\": \"Acme Builders\",\n    \"role\": \"referral_partner\",\n    \"is_active\": 1\n  }\n}"
+            },
+            {
+              "name": "422 - Invalid OTP",
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "body": "{\n  \"message\": \"Invalid or expired OTP.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/me",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "Get authenticated user's profile. Requires bearer token."
+          },
+          "response": [
+            {
+              "name": "200 - User profile",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"user\": {\n    \"id\": 1,\n    \"name\": \"John Doe\",\n    \"phone\": \"9876543210\",\n    \"company\": \"Acme Builders\",\n    \"role\": \"referral_partner\",\n    \"is_active\": 1\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/logout",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "logout"]
+            },
+            "description": "Invalidate the current JWT token."
+          },
+          "response": [
+            {
+              "name": "200 - Logged out",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"message\": \"Logged out successfully.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.token) {",
+                  "  pm.collectionVariables.set('token', json.token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/refresh",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "refresh"]
+            },
+            "description": "Exchange a valid (or recently expired) JWT for a new one. New token is auto-saved to {{token}}."
+          },
+          "response": [
+            {
+              "name": "200 - New token issued",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"token\": \"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...\",\n  \"token_type\": \"bearer\",\n  \"expires_in\": 3600\n}"
+            }
+          ]
+        }
+      ]
+    }
+    ,
+    {
+      "name": "Admin - Partner Management",
+      "item": [
+        {
+          "name": "List Pending Partners",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/partners/pending",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "partners", "pending"]
+            },
+            "description": "Returns all referral partners with status 'pending'. Requires admin bearer token."
+          },
+          "response": [
+            {
+              "name": "200 - Pending list",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"data\": [\n    {\n      \"id\": 2,\n      \"name\": \"Jane Smith\",\n      \"phone\": \"9876543210\",\n      \"company\": \"Builders Co\",\n      \"is_active\": null,\n      \"created_at\": \"2026-06-14T08:00:00.000000Z\"\n    }\n  ],\n  \"total\": 1\n}"
+            },
+            {
+              "name": "403 - Not admin",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"message\": \"Unauthorized. Admin access required.\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Partner Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/partners/2/status",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "partners", "2", "status"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_active\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Set a pending partner's status. Pass is_active: true to approve, false to reject. Sends the appropriate WhatsApp notification. Requires admin bearer token."
+          },
+          "response": [
+            {
+              "name": "200 - Approved",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"message\": \"Partner approved successfully.\"\n}"
+            },
+            {
+              "name": "200 - Rejected",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"message\": \"Partner rejected successfully.\"\n}"
+            },
+            {
+              "name": "422 - Invalid value",
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "body": "{\n  \"message\": \"The is active field must be true or false.\",\n  \"errors\": {\n    \"is_active\": [\"The is active field must be true or false.\"]\n  }\n}"
+            },
+            {
+              "name": "422 - Not pending",
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "body": "{\n  \"message\": \"Only pending registrations can be updated.\"\n}"
+            },
+            {
+              "name": "403 - Not admin",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"message\": \"Unauthorized. Admin access required.\"\n}"
+            },
+            {
+              "name": "404 - User not found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"message\": \"No query results for model [App\\\\Models\\\\User].\"\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

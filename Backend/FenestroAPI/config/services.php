@@ -35,4 +35,12 @@ return [
         ],
     ],
 
+    'whatsapp' => [
+        'token'             => env('WHATSAPP_TOKEN'),
+        'phone_number_id'   => env('WHATSAPP_PHONE_NUMBER_ID'),
+        'api_version'       => env('WHATSAPP_API_VERSION', 'v21.0'),
+        'verify_token'      => env('WHATSAPP_VERIFY_TOKEN', 'fenestro_webhook_secret'),
+        'ops_manager_phone' => env('WHATSAPP_OPS_MANAGER_PHONE', '8431474741'),
+    ],
+
 ];
