@@ -55,6 +55,11 @@ class User extends Authenticatable implements JWTSubject
         return $this->role === 'admin';
     }
 
+    public function isInternalTeam(): bool
+    {
+        return $this->role === 'internal_team';
+    }
+
     public function isApprovedPartner(): bool
     {
         return $this->role === 'referral_partner' && $this->is_active === 1;

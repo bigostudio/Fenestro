@@ -11,6 +11,19 @@ use Illuminate\Http\Request;
 
 class PartnerController extends Controller
 {
+    public function approved(): JsonResponse
+    {
+        $users = User::where('role', 'referral_partner')
+            ->where('is_active', 1)
+            ->orderBy('created_at', 'desc')
+            ->get(['id', 'name', 'phone', 'company', 'is_active', 'created_at']);
+
+        return response()->json([
+            'data'  => $users,
+            'total' => $users->count(),
+        ]);
+    }
+
     public function pending(): JsonResponse
     {
         $users = User::where('role', 'referral_partner')
