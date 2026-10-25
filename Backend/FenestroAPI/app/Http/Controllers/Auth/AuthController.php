@@ -39,7 +39,10 @@ class AuthController extends Controller
             'phone' => 'required|digits:10',
         ]);
 
-        $user = User::where('phone', $request->phone)->first();
+        // OTP login is for referral partners only. Admins sign in with email +
+        // password at /admin/login; other accounts get the same answer as an
+        // unknown number so this endpoint can't be used to find admin phones.
+        $user = User::where('phone', $request->phone)->where('role', 'referral_partner')->first();
 
         if (! $user) {
             return response()->json(['message' => 'Phone number not registered.'], 404);
@@ -61,8 +64,9 @@ class AuthController extends Controller
             'otp_expires_at' => now()->addMinutes(10),
         ]);
 
-        // TODO: Send OTP via WhatsApp when Meta templates are approved
-        // WhatsApp send is bypassed — OTP 123456 always works in dev
+        // TODO: Send OTP via WhatsApp when Meta templates are approved.
+        // Until then the code is only logged; the fixed code 123456 works on
+        // local/test servers only (see verifyOtp), never in production.
         \Illuminate\Support\Facades\Log::info("OTP for {$user->phone}: {$otp}");
 
         return response()->json([
@@ -77,13 +81,23 @@ class AuthController extends Controller
             'otp'   => 'required|digits:6',
         ]);
 
-        $user = User::where('phone', $request->phone)->first();
+        // Partners only — an OTP (or the bypass below) must never yield an admin token.
+        $user = User::where('phone', $request->phone)->where('role', 'referral_partner')->first();
 
         if (! $user) {
             return response()->json(['message' => 'Phone number not registered.'], 404);
         }
 
-        $isBypass   = $request->otp === '123456';
+        // Only approved partners may sign in (same answers as send-otp).
+        if ($user->is_active === null) {
+            return response()->json(['message' => 'Your registration is pending approval by the admin.'], 403);
+        }
+        if ((int) $user->is_active !== 1) {
+            return response()->json(['message' => 'Your registration has been rejected. Please contact support.'], 403);
+        }
+
+        // Development shortcut: the fixed code works on local/test servers only — never in production.
+        $isBypass   = app()->environment(['local', 'testing']) && $request->otp === '123456';
         $isValidOtp = $user->otp === $request->otp
             && $user->otp_expires_at !== null
             && now()->lessThanOrEqualTo($user->otp_expires_at);
@@ -136,6 +150,13 @@ class AuthController extends Controller
 
     public function refresh(): JsonResponse
     {
+        // An admin token from before a password change (or for a deactivated
+        // admin) can't be renewed, so it dies at its normal expiry.
+        $user = auth('api')->user();
+        if ($user?->role === 'admin' && (! $user->isAdmin() || ! $user->tokenMatchesCurrentPassword())) {
+            return response()->json(['message' => 'Your session has expired. Please sign in again.'], 401);
+        }
+
         $token = auth('api')->refresh();
 
         return response()->json([

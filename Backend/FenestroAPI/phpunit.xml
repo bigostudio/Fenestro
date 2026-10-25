@@ -19,6 +19,9 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <!-- Test-only keys; never used outside the test suite. -->
+        <env name="APP_KEY" value="base64:dGVzdGluZy1rZXktb25seS1mb3ItcGhwdW5pdC0wMDA="/>
+        <env name="JWT_SECRET" value="testing-only-jwt-secret-for-phpunit-0000000000"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>

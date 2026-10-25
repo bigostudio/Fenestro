@@ -36,10 +36,21 @@ return [
     ],
 
     'whatsapp' => [
+        // Master switch for every automatic WhatsApp message (lead/partner alerts,
+        // statement documents). Off until the Cloud API setup is complete and
+        // tested with "php artisan whatsapp:check --to=YOUR_NUMBER".
+        'enabled'           => (bool) env('WHATSAPP_SENDING_ENABLED', false),
         'token'             => env('WHATSAPP_TOKEN'),
         'phone_number_id'   => env('WHATSAPP_PHONE_NUMBER_ID'),
         'api_version'       => env('WHATSAPP_API_VERSION', 'v21.0'),
-        'verify_token'      => env('WHATSAPP_VERIFY_TOKEN', 'fenestro_webhook_secret'),
+        // WhatsApp Business Account ID (optional; lets the connection check confirm the statement template).
+        'business_account_id' => env('WHATSAPP_BUSINESS_ACCOUNT_ID'),
+        // Graph API host. Only changed for local testing against a fake server.
+        'api_base'          => env('WHATSAPP_API_BASE', 'https://graph.facebook.com'),
+        // Webhook (delivery statuses): verify token you choose in the Meta app's
+        // Webhooks settings, and the app secret used to check Meta's signature.
+        'verify_token'      => env('WHATSAPP_VERIFY_TOKEN'),
+        'app_secret'        => env('WHATSAPP_APP_SECRET'),
         'ops_manager_phone' => env('WHATSAPP_OPS_MANAGER_PHONE', '8431474741'),
     ],
 

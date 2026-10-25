@@ -16,6 +16,10 @@ class InternalAccessMiddleware
             return response()->json(['message' => 'Unauthorized. Internal access required.'], 403);
         }
 
+        if ($user->isAdmin() && ! $user->tokenMatchesCurrentPassword()) {
+            return response()->json(['message' => 'Your session has expired. Please sign in again.'], 401);
+        }
+
         return $next($request);
     }
 }

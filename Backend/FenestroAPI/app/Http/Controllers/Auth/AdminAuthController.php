@@ -6,56 +6,39 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
 
+/**
+ * Admin email/password login.
+ *
+ * There is intentionally no public registration or self-service password
+ * reset here. Admin accounts are provisioned on the server with
+ * `php artisan admin:create` and passwords are reset with
+ * `php artisan admin:reset-password`.
+ */
 class AdminAuthController extends Controller
 {
-    public function register(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'name'     => 'required|string|max:255',
-            'email'    => 'required|email|unique:users,email',
-            'password' => 'required|string|min:8|confirmed',
-            'phone'    => 'required|digits:10|unique:users,phone',
-        ]);
-
-        $user = User::create([
-            'name'      => $validated['name'],
-            'email'     => $validated['email'],
-            'password'  => $validated['password'],
-            'phone'     => $validated['phone'],
-            'role'      => 'admin',
-            'is_active' => 1,
-        ]);
-
-        $token = auth('api')->login($user);
-
-        return response()->json([
-            'message'    => 'Admin registered successfully.',
-            'token'      => $token,
-            'token_type' => 'bearer',
-            'expires_in' => auth('api')->factory()->getTTL() * 60,
-            'user'       => $this->userPayload($user),
-        ], 201);
-    }
+    private const INVALID_CREDENTIALS = 'Invalid email or password.';
 
     public function login(Request $request): JsonResponse
     {
         $request->validate([
-            'email'    => 'required|email',
-            'password' => 'required|string',
+            'email'    => 'required|email|max:255',
+            'password' => 'required|string|max:255',
         ]);
 
         $user = User::where('email', $request->email)->first();
 
-        if (! $user || ! Hash::check($request->password, $user->password)) {
-            return response()->json(['message' => 'Invalid email or password.'], 401);
-        }
+        // Always run a hash check so response time doesn't reveal whether the email exists.
+        $passwordOk = Hash::check(
+            $request->password,
+            $user?->password ?? '$2y$12$7yB7n2r8m1fWQvZ3k8b8A.4qkKz5hM3mJk0s1lL9i2kQy6l0uY1rW'
+        );
 
-        if ($user->role !== 'admin') {
-            return response()->json(['message' => 'Unauthorized. Admin access required.'], 403);
+        // Same message for unknown email, wrong password, non-admin and
+        // deactivated accounts, so the endpoint can't be used to probe accounts.
+        if (! $user || ! $passwordOk || ! $user->isAdmin() || (int) $user->is_active !== 1) {
+            return response()->json(['message' => self::INVALID_CREDENTIALS], 401);
         }
 
         $token = auth('api')->login($user);
@@ -66,74 +49,6 @@ class AdminAuthController extends Controller
             'expires_in' => auth('api')->factory()->getTTL() * 60,
             'user'       => $this->userPayload($user),
         ]);
-    }
-
-    public function forgotPassword(Request $request): JsonResponse
-    {
-        $request->validate([
-            'email' => 'required|email|exists:users,email',
-        ]);
-
-        $user = User::where('email', $request->email)->where('role', 'admin')->first();
-
-        if (! $user) {
-            return response()->json(['message' => 'No admin account found with that email.'], 404);
-        }
-
-        // Delete any existing token for this email
-        DB::table('password_reset_tokens')->where('email', $request->email)->delete();
-
-        $token = Str::random(64);
-
-        DB::table('password_reset_tokens')->insert([
-            'email'      => $request->email,
-            'token'      => Hash::make($token),
-            'created_at' => now(),
-        ]);
-
-        return response()->json([
-            'message'      => 'Password reset token generated.',
-            'reset_token'  => $token,
-            'expires_in'   => '60 minutes',
-        ]);
-    }
-
-    public function resetPassword(Request $request): JsonResponse
-    {
-        $request->validate([
-            'email'    => 'required|email',
-            'token'    => 'required|string',
-            'password' => 'required|string|min:8|confirmed',
-        ]);
-
-        $record = DB::table('password_reset_tokens')
-            ->where('email', $request->email)
-            ->first();
-
-        if (! $record) {
-            return response()->json(['message' => 'Invalid or expired reset token.'], 422);
-        }
-
-        if (now()->diffInMinutes($record->created_at) > 60) {
-            DB::table('password_reset_tokens')->where('email', $request->email)->delete();
-            return response()->json(['message' => 'Reset token has expired.'], 422);
-        }
-
-        if (! Hash::check($request->token, $record->token)) {
-            return response()->json(['message' => 'Invalid or expired reset token.'], 422);
-        }
-
-        $user = User::where('email', $request->email)->where('role', 'admin')->first();
-
-        if (! $user) {
-            return response()->json(['message' => 'No admin account found with that email.'], 404);
-        }
-
-        $user->update(['password' => $request->password]);
-
-        DB::table('password_reset_tokens')->where('email', $request->email)->delete();
-
-        return response()->json(['message' => 'Password reset successfully.']);
     }
 
     private function userPayload(User $user): array
