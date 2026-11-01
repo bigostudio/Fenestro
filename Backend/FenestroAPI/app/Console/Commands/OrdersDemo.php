@@ -28,6 +28,8 @@ use Illuminate\Support\Facades\DB;
  *   same way Project Abort records them), and two disposable records for a live
  *   demo: 014 (no history — Delete Project) and 015 (active, paid — Project Abort).
  *   Re-running restores both. A figures table is printed at the end.
+ * - Inventory: PV-DEMO-PROFILE-A/B (shortages on PV-DEMO-006), C (quantity 0), D/E (in stock),
+ *   with the expected stock / shortage values (unit cost × 5.8 × qty + 18% GST) printed.
  */
 class OrdersDemo extends Command
 {
@@ -178,17 +180,21 @@ class OrdersDemo extends Command
                 }
             }
 
-            // Shortage example for PV-DEMO-006: current stock = base stock − usage ≤ 0.
-            foreach ([['A', 'SLIDING WINDOW SASH (SHORTAGE EXAMPLE)', 2, 6], ['B', 'CASEMENT OUTER FRAME (SHORTAGE EXAMPLE)', 0, 3]] as [$s, $item, $base, $use]) {
+            // Profile codes [suffix, item, base stock, unit cost, usage on PV-DEMO-006]. Current stock =
+            // base stock − usage: A and B are shortages; C starts at quantity 0; D and E are in stock.
+            foreach (self::demoProfiles() as [$s, $item, $base, $cost, $use]) {
                 $profile = InventoryProfile::updateOrCreate(['code' => $prefix.'PROFILE-'.$s], [
-                    'item' => '[DEMO] '.$item, 'base_stock' => $base, 'stock' => $base, 'unit_cost' => 350,
+                    'item' => '[DEMO] '.$item, 'base_stock' => $base, 'stock' => $base - $use, 'unit_cost' => $cost,
                 ]);
                 $profile->usages()->delete();
-                $profile->usages()->create(['usage_key' => $prefix.'006', 'qty' => $use]);
+                $profile->movements()->delete();
+                if ($use > 0) {
+                    $profile->usages()->create(['usage_key' => $prefix.'006', 'qty' => $use]);
+                }
             }
         });
 
-        $this->info("Demo data ready: {$added} order(s) added, ".(count($rows) - $added).' reset. IDs '.$prefix.'001 … '.$prefix.sprintf('%03d', count($rows)).', plus 2 demo shortage profiles.');
+        $this->info("Demo data ready: {$added} order(s) added, ".(count($rows) - $added).' reset. IDs '.$prefix.'001 … '.$prefix.sprintf('%03d', count($rows)).', plus '.count(self::demoProfiles()).' demo profile codes.');
         // Figures as the app calculates them (the same numbers Receivables, Archive and the PDFs show).
         $this->table(['ID', 'Project', 'Status', 'Invoice', 'Payments', 'Refunded', 'Net received', 'Balance', 'Payment status', 'Refund status'],
             Order::with('receipts')->where('code', 'like', $prefix.'%')->orderBy('code')->get()->map(fn (Order $o) => [
@@ -196,8 +202,26 @@ class OrdersDemo extends Command
                 ...array_map(fn ($v) => number_format($v, 2), [$o->invoiceAmount(), $o->paymentsAmount(), $o->refundedAmount(), $o->receivedAmount(), $o->outstanding()]),
                 $o->paymentStatus(), $o->refundStatus(),
             ])->all());
+        // Expected Inventory values: unit cost × 5.8 × quantity + 18% GST (as the Inventory page calculates them).
+        $value = fn (float $cost, float $qty) => round($cost * 5.8 * max(0, $qty) * 1.18, 2);
+        $profiles = collect(self::demoProfiles())->map(fn ($p) => [$prefix.'PROFILE-'.$p[0], $p[2] - $p[4], $p[3], $value($p[3], $p[2] - $p[4]), $value($p[3], $p[4] - $p[2])]);
+        $this->table(['Profile code', 'Current stock', 'Unit cost', 'Stock value', 'Shortage value to buy'],
+            $profiles->map(fn ($r) => [$r[0], $r[1], number_format($r[2], 2), number_format($r[3], 2), number_format($r[4], 2)])
+                ->push(['Totals', '', '', number_format($profiles->sum(3), 2), number_format($profiles->sum(4), 2)])->all());
         $this->line('Remove with: php artisan orders:demo --remove');
 
         return self::SUCCESS;
+    }
+
+    /** [suffix, item, base stock, unit cost, usage on PV-DEMO-006] */
+    private static function demoProfiles(): array
+    {
+        return [
+            ['A', 'SLIDING WINDOW SASH (SHORTAGE EXAMPLE)', 2, 350, 6],   // current −4 → shortage 4
+            ['B', 'CASEMENT OUTER FRAME (SHORTAGE EXAMPLE)', 0, 350, 3],  // current −3 → shortage 3
+            ['C', 'MULLION PROFILE (ZERO QUANTITY EXAMPLE)', 0, 200, 0],  // quantity 0: no value, no shortage
+            ['D', 'GLAZING BEAD (IN STOCK EXAMPLE)', 10, 100, 0],         // 100 × 5.8 × 10 × 1.18 = 6,844
+            ['E', 'DOOR SASH PROFILE (IN STOCK EXAMPLE)', 25, 180, 0],    // 180 × 5.8 × 25 × 1.18 = 30,798
+        ];
     }
 }

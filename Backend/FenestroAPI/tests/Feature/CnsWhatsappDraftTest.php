@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\OrderManagement\Order;
 use App\Models\User;
+use App\Support\OrderManagement;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -14,7 +15,7 @@ class CnsWhatsappDraftTest extends TestCase
 
     private string $token;
 
-    private const SIGN_CS = "\n\nRegards,\nPrestige Ventures – Customer Support";
+    private const SIGN_CS = "\n\nThanks,\nPrestige Ventures – Customer Support\n(A uPVC Windows & Doors Manufacturing Company)"; // cns.whatsapp.signature
 
     protected function setUp(): void
     {
@@ -94,14 +95,14 @@ class CnsWhatsappDraftTest extends TestCase
         $this->create();
         $expected = [
             'QSHARE'        => "Dear ANAND RAO,\n\nYour quotation has been shared. We look forward to your confirmation.".self::SIGN_CS,
-            'ADV RCVD'      => "Dear ANAND RAO,\n\nYour advance payment of amount ₹35,400 towards uPVC window/doors for project LAKE HOUSE has been received.\n\nThank you!\nPrestige Ventures – Admin",
-            'PART PAY RCVD' => "Dear ANAND RAO,\n\nPayment of amount ₹20,000 has been received. Please find your updated ledger statement.\n\nThank you,\nPrestige Ventures – Admin",
-            'FULL PAY RCVD' => "Dear ANAND RAO,\n\nFull payment received towards your project LAKE HOUSE. Please find your final ledger statement.\n\nThank you!\nPrestige Ventures – Admin",
+            'ADV RCVD'      => "Dear ANAND RAO,\n\nYour advance payment of amount ₹35,400 towards uPVC window/doors for project LAKE HOUSE has been received.".self::SIGN_CS,
+            'PART PAY RCVD' => "Dear ANAND RAO,\n\nPayment of amount ₹20,000 has been received. Please find your updated ledger statement.".self::SIGN_CS,
+            'FULL PAY RCVD' => "Dear ANAND RAO,\n\nFull payment received towards your project LAKE HOUSE. Please find your final ledger statement.".self::SIGN_CS,
             'MATRL ARIVD'   => "Dear ANAND RAO,\n\nMaterial for your project LAKE HOUSE has arrived. Production will begin shortly.".self::SIGN_CS,
             'PROD STRTD'    => "Dear ANAND RAO,\n\nProduction has started for your LAKE HOUSE project. Expected installation date: 15 Nov 2026.".self::SIGN_CS,
             'INST STRTD'    => "Dear ANAND RAO,\n\nInstallation of uPVC windows/doors has started for your project LAKE HOUSE.".self::SIGN_CS,
-            'HAND OVER'     => "Dear ANAND RAO,\n\nInstallation and project LAKE HOUSE handover are complete.\n\nThank you for choosing us!\nPrestige Ventures – Customer Support",
-            'FEEDBACK REQ'  => "Dear ANAND RAO,\n\nWe value your feedback. Kindly share your experience on: https://g.page/r/example-review\n\nThanks,\nPrestige Ventures – Customer Support",
+            'HAND OVER'     => "Dear ANAND RAO,\n\nInstallation and project LAKE HOUSE handover are complete.\n\nThank you for choosing us!".self::SIGN_CS,
+            'FEEDBACK REQ'  => "Dear ANAND RAO,\n\nWe value your feedback. Kindly share your experience on: https://g.page/r/example-review\n\nThanks,\nPrestige Ventures – Customer Support\n(A uPVC Windows & Doors Manufacturing Company)",
             'INSTAL DELAY'  => "Dear ANAND RAO,\n\nPlease confirm your installation date at the earliest. Delays affect our planned schedules and financial commitments.".self::SIGN_CS,
         ];
         foreach ($expected as $value => $text) {
@@ -252,8 +253,17 @@ class CnsWhatsappDraftTest extends TestCase
         $this->assertEquals([0, 0, 0], [$demo['PV-DEMO-011']->outstanding(), $demo['PV-DEMO-012']->outstanding(), $demo['PV-DEMO-013']->outstanding()]);
         $this->assertCount(0, $demo['PV-DEMO-014']->receipts);                     // disposable: deletable
 
+        // Demo profile codes: two shortages, one at quantity 0, two in stock; a real profile is left alone.
+        \App\Models\OrderManagement\InventoryProfile::create(['code' => 'REAL-PROFILE-1', 'item' => 'REAL', 'base_stock' => 5, 'stock' => 5, 'unit_cost' => 10]);
+        $profiles = \App\Models\OrderManagement\InventoryProfile::with('usages')->where('code', 'like', 'PV-DEMO-PROFILE-%')->get()->keyBy('code');
+        $this->assertSame(['A', 'B', 'C', 'D', 'E'], $profiles->keys()->map(fn ($c) => substr($c, -1))->sort()->values()->all());
+        $current = $profiles->map(fn ($p) => $p->base_stock - $p->usages->sum('qty'));
+        $this->assertEquals(['PV-DEMO-PROFILE-A' => -4, 'PV-DEMO-PROFILE-B' => -3, 'PV-DEMO-PROFILE-C' => 0, 'PV-DEMO-PROFILE-D' => 10, 'PV-DEMO-PROFILE-E' => 25], $current->sortKeys()->all());
+        $this->assertTrue($profiles->every(fn ($p) => str_starts_with($p->item, '[DEMO] ')));
+
         $this->artisan('orders:demo', ['--remove' => true])->assertSuccessful();
         $this->assertSame(1, Order::count());
+        $this->assertSame(['REAL-PROFILE-1'], \App\Models\OrderManagement\InventoryProfile::pluck('code')->all());
     }
 
     public function test_demo_command_refuses_to_run_in_production(): void
@@ -279,5 +289,44 @@ class CnsWhatsappDraftTest extends TestCase
         $this->assertNull($d['phone']);
         $this->assertStringStartsWith('https://wa.me/?text=', $d['url']);
         $this->assertStringNotContainsString('9000000106', $d['url']);
+    }
+
+    public function test_signature_is_added_exactly_once_and_replaces_an_older_sign_off(): void
+    {
+        $sig = trim(self::SIGN_CS);
+        $this->assertSame("Hello\n\n".$sig, OrderManagement::withSignature('Hello'));
+        $this->assertSame("Hello\n\n".$sig, OrderManagement::withSignature("Hello\n\n".$sig."\n")); // already signed
+        $this->assertSame("Hello\n\n".$sig, OrderManagement::withSignature("Hello\n\nRegards,\nPrestige Ventures - Admin"));
+        $this->assertSame("Hello\n\nThank you for choosing us!\n\n".$sig, OrderManagement::withSignature("Hello\n\nThank you for choosing us!\nPrestige Ventures – Customer Support"));
+        // A customised template that still carries an old sign-off gets one signature, not two.
+        config(['cns.whatsapp.templates.comm.QSHARE' => "Dear {customer_name},\n\nQuote shared.\n\nRegards,\nPrestige Ventures – Customer Support"]);
+        $this->create();
+        $this->assertSame("Dear ANAND RAO,\n\nQuote shared.".self::SIGN_CS, $this->draftFor('QSHARE')['text']);
+    }
+
+    public function test_every_draft_type_ends_with_the_signature_once(): void
+    {
+        config(['cns.whatsapp.google_review_url' => 'https://g.page/r/CSU2H9tOGNG0EBE/review']);
+        $this->create();
+        $texts = [];
+        foreach (array_keys(config('cns.whatsapp.templates.comm')) as $value) {
+            $this->saveStatuses('PV-2610-001', ['comm' => 'NO'])->assertOk();
+            $texts[$value] = $this->draftFor($value)['text'];
+        }
+        $order = Order::with('receipts')->first();
+        $texts['statement'] = OrderManagement::statementDraft($order)['text'];
+        $texts['reminder'] = OrderManagement::reminderDraft($order)['text'];
+        foreach ($texts as $kind => $text) {
+            $this->assertStringEndsWith(self::SIGN_CS, $text, $kind);
+            $this->assertSame(1, substr_count($text, 'Prestige Ventures – Customer Support'), $kind);
+            $this->assertSame(1, substr_count($text, '(A uPVC Windows & Doors Manufacturing Company)'), $kind);
+            $this->assertStringNotContainsString('Regards', $text, $kind);
+        }
+        $this->assertStringContainsString('https://g.page/r/CSU2H9tOGNG0EBE/review', $texts['FEEDBACK REQ']);
+        foreach ($texts as $kind => $text) {
+            if ($kind !== 'FEEDBACK REQ') {
+                $this->assertStringNotContainsString('g.page', $text, $kind); // review link only in the feedback request
+            }
+        }
     }
 }

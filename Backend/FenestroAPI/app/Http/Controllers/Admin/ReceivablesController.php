@@ -28,7 +28,7 @@ class ReceivablesController extends Controller
     public function index(): JsonResponse
     {
         $rows = Order::with('receipts')->orderByDesc('id')->get()
-            ->filter(fn (Order $o) => $o->outstanding() > 0 && ! $o->isArchived())
+            ->filter(fn (Order $o) => $o->isReceivable())
             ->map(fn (Order $o) => $o->receivableSummary())
             ->values();
 
@@ -95,6 +95,49 @@ class ReceivablesController extends Controller
         }
 
         return response()->json(['statements' => $statements, 'skipped' => $skipped, 'whatsapp_api' => self::apiStatus()]);
+    }
+
+    /**
+     * Receivables → Reminder: a payment-reminder message for each selected project,
+     * with the customer's name, the server's outstanding balance and the WhatsApp
+     * number to open. Read-only: nothing is sent or stored; the admin reviews each
+     * message in WhatsApp and presses Send there.
+     */
+    public function reminders(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'ids'   => 'required|array|min:1|max:100',
+            'ids.*' => 'required|string|max:20|distinct',
+        ]);
+
+        $orders = Order::with('receipts')->whereIn('code', $data['ids'])->get()->keyBy('code');
+        $out = [];
+        foreach ($data['ids'] as $code) {
+            $order = $orders->get($code);
+            if (! $order) {
+                $out[] = ['id' => $code, 'customer' => '', 'project' => '', 'outstanding' => 0, 'phone' => null, 'text' => null, 'test_recipient' => false, 'demo' => false, 'problem' => 'Project not found.'];
+                continue;
+            }
+            $outstanding = $order->outstanding();
+            $row = ['id' => $order->code, 'customer' => OrderManagement::upper($order->customer), 'project' => OrderManagement::upper($order->project), 'outstanding' => $outstanding];
+            if ($outstanding <= 0 || $order->isArchived()) {
+                $out[] = $row + ['phone' => null, 'text' => null, 'test_recipient' => false, 'demo' => OrderManagement::isDemoCode($order->code),
+                    'problem' => 'No reminder needed: this project has no outstanding balance.'];
+                continue;
+            }
+            $draft = OrderManagement::reminderDraft($order);
+            $problem = $draft['text'] === null ? ($draft['reason'] ?? 'The reminder could not be prepared.')
+                : (! $draft['phone'] ? ($draft['demo'] ? $draft['reason'] : 'No valid WhatsApp number on this project. Add the customer’s 10-digit mobile number in Customer & Orders.') : null);
+            $out[] = $row + [
+                'phone'          => $draft['phone'],
+                'text'           => $draft['text'],
+                'test_recipient' => $draft['test_recipient'],
+                'demo'           => $draft['demo'],
+                'problem'        => $problem,
+            ];
+        }
+
+        return response()->json(['reminders' => $out]);
     }
 
     /**
@@ -301,6 +344,7 @@ class ReceivablesController extends Controller
             return true; // non-ASCII names are encoded differently inside the PDF; the project ID check still applies
         }
 
-        return str_contains($pdf, str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $name));
+        // Ignore case: the PDF prints the name in proper case, the portal stores it in upper case.
+        return str_contains(strtolower($pdf), strtolower(str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $name)));
     }
 }

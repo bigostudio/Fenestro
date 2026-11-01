@@ -148,27 +148,36 @@ return [
         //   {payment_amount}      latest receipt (by date) — the most recent payment
         //   {installation_date}   order's expected installation date
         //   {google_review_link}  google_review_url below
+        // Templates hold the message body only: 'signature' below is appended
+        // to every draft (OrderManagement::withSignature), so do not add a
+        // sign-off here.
         'templates' => [
             'comm' => [
-                'QSHARE'        => "Dear {customer_name},\n\nYour quotation has been shared. We look forward to your confirmation.\n\nRegards,\nPrestige Ventures – Customer Support",
-                'ADV RCVD'      => "Dear {customer_name},\n\nYour advance payment of amount {advance_amount} towards uPVC window/doors for project {project_name} has been received.\n\nThank you!\nPrestige Ventures – Admin",
-                'PART PAY RCVD' => "Dear {customer_name},\n\nPayment of amount {payment_amount} has been received. Please find your updated ledger statement.\n\nThank you,\nPrestige Ventures – Admin",
-                'FULL PAY RCVD' => "Dear {customer_name},\n\nFull payment received towards your project {project_name}. Please find your final ledger statement.\n\nThank you!\nPrestige Ventures – Admin",
-                'MATRL ARIVD'   => "Dear {customer_name},\n\nMaterial for your project {project_name} has arrived. Production will begin shortly.\n\nRegards,\nPrestige Ventures – Customer Support",
-                'PROD STRTD'    => "Dear {customer_name},\n\nProduction has started for your {project_name} project. Expected installation date: {installation_date}.\n\nRegards,\nPrestige Ventures – Customer Support",
-                'INST STRTD'    => "Dear {customer_name},\n\nInstallation of uPVC windows/doors has started for your project {project_name}.\n\nRegards,\nPrestige Ventures – Customer Support",
-                'HAND OVER'     => "Dear {customer_name},\n\nInstallation and project {project_name} handover are complete.\n\nThank you for choosing us!\nPrestige Ventures – Customer Support",
-                'FEEDBACK REQ'  => "Dear {customer_name},\n\nWe value your feedback. Kindly share your experience on: {google_review_link}\n\nThanks,\nPrestige Ventures – Customer Support",
-                'INSTAL DELAY'  => "Dear {customer_name},\n\nPlease confirm your installation date at the earliest. Delays affect our planned schedules and financial commitments.\n\nRegards,\nPrestige Ventures – Customer Support",
+                'QSHARE'        => "Dear {customer_name},\n\nYour quotation has been shared. We look forward to your confirmation.",
+                'ADV RCVD'      => "Dear {customer_name},\n\nYour advance payment of amount {advance_amount} towards uPVC window/doors for project {project_name} has been received.",
+                'PART PAY RCVD' => "Dear {customer_name},\n\nPayment of amount {payment_amount} has been received. Please find your updated ledger statement.",
+                'FULL PAY RCVD' => "Dear {customer_name},\n\nFull payment received towards your project {project_name}. Please find your final ledger statement.",
+                'MATRL ARIVD'   => "Dear {customer_name},\n\nMaterial for your project {project_name} has arrived. Production will begin shortly.",
+                'PROD STRTD'    => "Dear {customer_name},\n\nProduction has started for your {project_name} project. Expected installation date: {installation_date}.",
+                'INST STRTD'    => "Dear {customer_name},\n\nInstallation of uPVC windows/doors has started for your project {project_name}.",
+                'HAND OVER'     => "Dear {customer_name},\n\nInstallation and project {project_name} handover are complete.\n\nThank you for choosing us!",
+                'FEEDBACK REQ'  => "Dear {customer_name},\n\nWe value your feedback. Kindly share your experience on: {google_review_link}",
+                'INSTAL DELAY'  => "Dear {customer_name},\n\nPlease confirm your installation date at the earliest. Delays affect our planned schedules and financial commitments.",
             ],
             // PRODUCTION STATUS no longer opens a draft (PROD STRTD above is the
             // single production message).
         ],
 
-        // Google review link for FEEDBACK REQ. Not configured yet: set
-        // CNS_GOOGLE_REVIEW_URL (e.g. your Google Business "write a review" link).
-        // Until then FEEDBACK REQ saves the status but no draft is opened.
+        // Google review link for FEEDBACK REQ, from CNS_GOOGLE_REVIEW_URL
+        // (Prestige Ventures: https://g.page/r/CSU2H9tOGNG0EBE/review). If it
+        // is not set, FEEDBACK REQ saves the status but no draft is opened.
         'google_review_url' => env('CNS_GOOGLE_REVIEW_URL'),
+
+        // Company signature closing EVERY WhatsApp message built by the portal
+        // (CNS status drafts, statements, payment reminders). Change it here
+        // only; the browser-built partner/ops messages use the same text in
+        // Fenestro-Client/src/utils/whatsapp.ts.
+        'signature' => "Thanks,\nPrestige Ventures – Customer Support\n(A uPVC Windows & Doors Manufacturing Company)",
 
         // Receivables / Archive → Send Statement: message pre-filled in the
         // customer's WhatsApp chat (wa.me click-to-chat) and offered with the
@@ -178,9 +187,14 @@ return [
         //   statement_template          money still due
         //   statement_template_paid     fully paid: thank-you, no payment request
         //   statement_template_aborted  PROJECT ABORT: payments, refunds, amount retained, balance ₹0
-        'statement_template' => "Dear {customer_name},\n\nGreetings from Prestige Ventures.\n\nPlease find your payment statement for {project_name} (Project ID: {order_id}).\n\nInvoice Amount: {invoice_amount}\nTotal Received: {received_amount}\nOutstanding Balance: {outstanding_amount}\n\nThe statement contains the payment details recorded for your project. Kindly review it and let us know if you have any questions.\n\nRegards,\nPrestige Ventures",
-        'statement_template_paid' => "Dear {customer_name},\n\nGreetings from Prestige Ventures.\n\nPlease find your payment statement for {project_name} (Project ID: {order_id}).\n\nInvoice Amount: {invoice_amount}\nTotal Received: {received_amount}\nOutstanding Balance: {outstanding_amount}\n\nThis project is fully paid and the outstanding balance is ₹0. Thank you for completing your payments. The statement contains the complete payment history for your records.\n\nRegards,\nPrestige Ventures",
-        'statement_template_aborted' => "Dear {customer_name},\n\nGreetings from Prestige Ventures.\n\nPlease find the payment statement for {project_name} (Project ID: {order_id}). This project has been closed.\n\nInvoice Amount: {invoice_amount}\nTotal Payments: {payments_amount}\nTotal Refunded: {refunded_amount}\nNet Amount Retained: {received_amount}\nBalance After Abort: {outstanding_amount}\n\nThe statement lists every payment and refund we have recorded for this project. Please let us know if you have any questions about it.\n\nRegards,\nPrestige Ventures",
+        'statement_template' => "Dear {customer_name},\n\nGreetings from Prestige Ventures.\n\nPlease find your payment statement for {project_name} (Project ID: {order_id}).\n\nInvoice Amount: {invoice_amount}\nTotal Received: {received_amount}\nOutstanding Balance: {outstanding_amount}\n\nThe statement contains the payment details recorded for your project. Kindly review it and let us know if you have any questions.",
+        'statement_template_paid' => "Dear {customer_name},\n\nGreetings from Prestige Ventures.\n\nPlease find your payment statement for {project_name} (Project ID: {order_id}).\n\nInvoice Amount: {invoice_amount}\nTotal Received: {received_amount}\nOutstanding Balance: {outstanding_amount}\n\nThis project is fully paid and the outstanding balance is ₹0. Thank you for completing your payments. The statement contains the complete payment history for your records.",
+        'statement_template_aborted' => "Dear {customer_name},\n\nGreetings from Prestige Ventures.\n\nPlease find the payment statement for {project_name} (Project ID: {order_id}). This project has been closed.\n\nInvoice Amount: {invoice_amount}\nTotal Payments: {payments_amount}\nTotal Refunded: {refunded_amount}\nNet Amount Retained: {received_amount}\nBalance After Abort: {outstanding_amount}\n\nThe statement lists every payment and refund we have recorded for this project. Please let us know if you have any questions about it.",
+
+        // Receivables → Reminder: payment reminder pre-filled in the customer's WhatsApp
+        // chat (click-to-chat; the admin presses Send). Wording from the 2026-10-29 request.
+        // {outstanding_amount} prints as ₹55,000.
+        'reminder_template' => "Dear {customer_name},\n\nGreetings!\n\nThis is a gentle reminder to kindly clear the pending balance amount of {outstanding_amount} at the earliest.\n\nThank you for your continued support and cooperation.",
 
         // Statement messages for Send Statement. The click-to-chat workflow only
         // pre-fills a chat the admin sends by hand, so it is on by default.

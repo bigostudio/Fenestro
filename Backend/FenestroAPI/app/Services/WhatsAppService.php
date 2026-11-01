@@ -92,6 +92,55 @@ class WhatsAppService
         }
     }
 
+    /**
+     * Send one text message: as the approved template $templateName with body
+     * variables $bodyParams, or (no template) as a free-form text, which
+     * WhatsApp only delivers within 24 hours of the customer's last message.
+     * Logs a masked number only, never the text or the token.
+     *
+     * Returns ['accepted' => bool, 'message_id' => ?string, 'error' => ?string];
+     * "accepted" = taken by the Cloud API for delivery (not a delivery receipt).
+     */
+    public function sendMessage(string $to, string $text, ?string $templateName = null, array $bodyParams = [], string $language = 'en'): array
+    {
+        if (! $this->isEnabled()) {
+            return ['accepted' => false, 'message_id' => null, 'error' => 'WhatsApp sending is switched off or not configured on this server.'];
+        }
+        $to = $this->formatPhone($to);
+        $masked = self::mask($to);
+        $payload = ['messaging_product' => 'whatsapp', 'recipient_type' => 'individual', 'to' => $to];
+        $payload += $templateName
+            ? ['type' => 'template', 'template' => [
+                'name' => $templateName,
+                'language' => ['code' => $language],
+                'components' => [['type' => 'body', 'parameters' => array_map(fn ($v) => ['type' => 'text', 'text' => (string) $v], $bodyParams)]],
+            ]]
+            : ['type' => 'text', 'text' => ['preview_url' => false, 'body' => $text]];
+
+        try {
+            $sent = Http::withToken($this->token)->timeout(20)->post($this->baseUrl, $payload);
+            $messageId = $sent->json('messages.0.id');
+            if (! $sent->successful() || ! $messageId) {
+                return $this->failure('message', $masked, $sent);
+            }
+            Log::channel('stack')->info('WhatsApp message accepted', ['to' => $masked, 'message_id' => $messageId, 'template' => $templateName ?? 'text']);
+
+            return ['accepted' => true, 'message_id' => $messageId, 'error' => null];
+        } catch (\Throwable $e) {
+            Log::error('WhatsApp message send failed', ['to' => $masked, 'error' => $e->getMessage()]);
+
+            return ['accepted' => false, 'message_id' => null, 'error' => 'Could not reach the WhatsApp Cloud API: '.$e->getMessage()];
+        }
+    }
+
+    /** "919876543210" → "9198******10" (for logs and records). */
+    public static function mask(string $phone): string
+    {
+        $d = preg_replace('/\D/', '', $phone);
+
+        return strlen($d) > 6 ? substr($d, 0, 4).str_repeat('*', strlen($d) - 6).substr($d, -2) : str_repeat('*', strlen($d));
+    }
+
     private function failure(string $step, string $to, \Illuminate\Http\Client\Response $response): array
     {
         $error = $response->json('error.message') ?? ('HTTP '.$response->status());

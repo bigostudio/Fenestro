@@ -76,7 +76,7 @@ class InventoryStockTest extends TestCase
         $this->assertSame([], $rows[1]['errors']);
         $this->assertStringContainsString('item description', $rows[2]['errors'][0]);
         $this->assertStringContainsString('row 1', $rows[3]['errors'][0]);
-        $this->assertStringContainsString('greater than zero', $rows[4]['errors'][0]);
+        $this->assertStringContainsString('cannot be negative', $rows[4]['errors'][0]);
         $this->assertSame(2, $res->json('valid'));
         $this->assertSame(3, $res->json('invalid'));
         $this->assertSame(1, InventoryProfile::count()); // review saves nothing
@@ -100,6 +100,111 @@ class InventoryStockTest extends TestCase
         $this->assertSame(300.0, $new->unit_cost);
         $this->assertSame(2, StockMovement::count());
         $this->assertCount(2, $res->json('profiles'));
+    }
+
+    public function test_a_new_profile_code_can_start_with_quantity_zero(): void
+    {
+        // Bulk Data: a new code with opening quantity 0 is created at 0 (no stock movement, nothing was received).
+        $this->stockPost('bulk', ['commit' => true, 'rows' => [['code' => 'ZERO-1', 'item' => 'NEW MULLION', 'qty' => 0, 'unitCost' => 120]]])
+            ->assertCreated()->assertJsonPath('created', 1)
+            ->assertJsonPath('profiles.0.code', 'ZERO-1')
+            ->assertJsonPath('profiles.0.baseStock', 0)
+            ->assertJsonPath('profiles.0.stock', 0);
+        $p = InventoryProfile::where('code', 'ZERO-1')->first();
+        $this->assertSame(0.0, $p->base_stock);
+        $this->assertSame(0.0, $p->stock);
+        $this->assertSame(0, StockMovement::count());
+
+        // Still returned as 0 (not empty) when the page is reloaded.
+        $loaded = collect($this->withToken($this->token)->getJson('/api/admin/order-management/data')->assertOk()->json('inventory'))->firstWhere('code', 'ZERO-1');
+        $this->assertSame(0, $loaded['baseStock']);
+        $this->assertSame(0, $loaded['stock']);
+
+        // "+ Add profile" (the Inventory page's own form) also saves an opening stock of 0.
+        $this->withToken($this->token)->postJson('/api/admin/order-management/inventory', ['code' => 'ZERO-2', 'item' => 'NEW SASH', 'stock' => 0, 'baseStock' => 0, 'unitCost' => 0, 'usage' => []])
+            ->assertCreated()->assertJsonPath('data.stock', 0)->assertJsonPath('data.baseStock', 0);
+    }
+
+    public function test_new_profile_codes_still_reject_negative_or_non_numeric_quantities_and_adding_zero_stock(): void
+    {
+        $rows = $this->stockPost('bulk', ['rows' => [
+            ['code' => 'NEG-1', 'item' => 'X', 'qty' => -1],
+            ['code' => 'TXT-1', 'item' => 'X', 'qty' => 'abc'],
+            ['code' => 'DEC-1', 'item' => 'X', 'qty' => 1.5],
+            ['code' => 'EWSPL-LF-1001', 'qty' => 0], // adding 0 to an existing code is still refused
+        ]])->assertOk()->json('rows');
+        $this->assertStringContainsString('cannot be negative', $rows[0]['errors'][0]);
+        $this->assertStringContainsString('whole number', $rows[1]['errors'][0]);
+        $this->assertStringContainsString('whole number', $rows[2]['errors'][0]);
+        $this->assertStringContainsString('greater than zero', $rows[3]['errors'][0]);
+
+        $this->withToken($this->token)->postJson('/api/admin/order-management/inventory', ['code' => 'TXT-2', 'item' => 'X', 'stock' => 'abc', 'usage' => []])->assertStatus(422);
+        $this->withToken($this->token)->postJson('/api/admin/order-management/inventory', ['code' => 'DEC-2', 'item' => 'X', 'stock' => 1.5, 'usage' => []])->assertStatus(422);
+        $this->withToken($this->token)->postJson('/api/admin/order-management/inventory', ['code' => 'NEG-2', 'item' => 'X', 'stock' => -1, 'usage' => []])
+            ->assertStatus(422)->assertJsonValidationErrors(['stock' => '0 or more']);
+        $this->assertSame(1, InventoryProfile::count());
+    }
+
+    // ── Delete Profile Code ───────────────────────────────────────────
+
+    private function deleteProfile(string $code, ?string $confirm)
+    {
+        return $this->withToken($this->token)->deleteJson('/api/admin/order-management/inventory/'.rawurlencode($code), $confirm === null ? [] : ['confirm' => $confirm]);
+    }
+
+    public function test_an_unused_profile_code_is_deleted_only_after_typing_its_code(): void
+    {
+        InventoryProfile::create(['code' => 'SPARE-1', 'item' => 'SPARE SASH', 'base_stock' => 0, 'stock' => 0, 'unit_cost' => 50]);
+        $this->withToken($this->token)->getJson('/api/admin/order-management/inventory/SPARE-1/delete-check')->assertOk()
+            ->assertJsonPath('data.deletable', true)->assertJsonPath('data.reasons', [])->assertJsonPath('data.warnings', [])->assertJsonPath('data.item', 'SPARE SASH');
+
+        $this->deleteProfile('SPARE-1', null)->assertStatus(422);
+        $this->deleteProfile('SPARE-1', 'SPARE-2')->assertStatus(422)->assertJsonValidationErrors('confirm');
+        $this->assertTrue(InventoryProfile::where('code', 'SPARE-1')->exists());
+
+        $this->deleteProfile('SPARE-1', 'spare-1')->assertOk()->assertJsonPath('deleted', 'SPARE-1');
+        $this->assertFalse(InventoryProfile::where('code', 'SPARE-1')->exists());
+        $this->assertTrue(InventoryProfile::where('code', 'EWSPL-LF-1001')->exists()); // nothing else touched
+        $this->deleteProfile('SPARE-1', 'SPARE-1')->assertNotFound();
+    }
+
+    public function test_a_profile_code_with_project_usage_or_stock_history_cannot_be_deleted(): void
+    {
+        // EWSPL-LF-1001 is used on PV-2610-001 (setUp).
+        $this->withToken($this->token)->getJson('/api/admin/order-management/inventory/EWSPL-LF-1001/delete-check')->assertOk()
+            ->assertJsonPath('data.deletable', false)->assertJsonPath('data.current_stock', -3);
+        $this->deleteProfile('EWSPL-LF-1001', 'EWSPL-LF-1001')->assertStatus(409);
+        $p = InventoryProfile::with('usages')->where('code', 'EWSPL-LF-1001')->first();
+        $this->assertNotNull($p);
+        $this->assertEquals(5, $p->usages->first()->qty);
+
+        // Stock history (Add Stock) also keeps a code.
+        InventoryProfile::create(['code' => 'HIST-1', 'item' => 'WITH HISTORY', 'base_stock' => 0, 'stock' => 0, 'unit_cost' => 0]);
+        $this->stockPost('add', ['code' => 'HIST-1', 'qty' => 3])->assertCreated();
+        $check = $this->withToken($this->token)->getJson('/api/admin/order-management/inventory/HIST-1/delete-check')->assertOk();
+        $check->assertJsonPath('data.deletable', false);
+        $this->assertStringContainsString('stock transaction', $check->json('data.reasons.0'));
+        $this->deleteProfile('HIST-1', 'HIST-1')->assertStatus(409);
+        $this->assertSame(1, StockMovement::count());
+
+        // Stock without history: deletable, with a warning about the balance.
+        InventoryProfile::create(['code' => 'OPEN-4', 'item' => 'OPENING STOCK ONLY', 'base_stock' => 4, 'stock' => 4, 'unit_cost' => 0]);
+        $this->withToken($this->token)->getJson('/api/admin/order-management/inventory/OPEN-4/delete-check')->assertOk()
+            ->assertJsonPath('data.deletable', true)->assertJsonPath('data.warnings.0', 'Its current stock of 4 will no longer be listed.');
+    }
+
+    public function test_profile_code_deletion_is_admin_only(): void
+    {
+        InventoryProfile::create(['code' => 'SPARE-2', 'item' => 'X', 'base_stock' => 0, 'stock' => 0, 'unit_cost' => 0]);
+        $this->app['auth']->forgetGuards();
+        $this->app->forgetInstance('tymon.jwt');
+        $this->app->forgetInstance('tymon.jwt.auth');
+        $this->deleteJson('/api/admin/order-management/inventory/SPARE-2', ['confirm' => 'SPARE-2'])->assertStatus(401);
+        $partner = User::create(['name' => 'P', 'phone' => '9000000002', 'role' => 'referral_partner', 'is_active' => 1]);
+        $pt = auth('api')->login($partner);
+        $this->withToken($pt)->getJson('/api/admin/order-management/inventory/SPARE-2/delete-check')->assertStatus(403);
+        $this->withToken($pt)->deleteJson('/api/admin/order-management/inventory/SPARE-2', ['confirm' => 'SPARE-2'])->assertStatus(403);
+        $this->assertTrue(InventoryProfile::where('code', 'SPARE-2')->exists());
     }
 
     public function test_stock_endpoints_are_admin_only(): void

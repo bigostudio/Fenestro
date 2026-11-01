@@ -309,7 +309,7 @@ class CnsWorkbookRulesTest extends TestCase
         $this->assertSame('PARTIALLY PAID', $st['payment_status']); // advance + one more payment
         $this->assertEquals(30000, $st['advance']);
         $this->assertEquals(20000, $st['partial']);
-        $this->assertSame("Dear ANAND RAO,\n\nGreetings from Prestige Ventures.\n\nPlease find your payment statement for LAKE HOUSE (Project ID: PV-2610-001).\n\nInvoice Amount: ₹1,18,000\nTotal Received: ₹50,000\nOutstanding Balance: ₹68,000\n\nThe statement contains the payment details recorded for your project. Kindly review it and let us know if you have any questions.\n\nRegards,\nPrestige Ventures", $st['draft']['text']);
+        $this->assertSame("Dear ANAND RAO,\n\nGreetings from Prestige Ventures.\n\nPlease find your payment statement for LAKE HOUSE (Project ID: PV-2610-001).\n\nInvoice Amount: ₹1,18,000\nTotal Received: ₹50,000\nOutstanding Balance: ₹68,000\n\nThe statement contains the payment details recorded for your project. Kindly review it and let us know if you have any questions.\n\nThanks,\nPrestige Ventures – Customer Support\n(A uPVC Windows & Doors Manufacturing Company)", $st['draft']['text']);
         $this->assertStringStartsWith('https://wa.me/919876543210?text=', $st['draft']['url']);
         $this->assertSame([['order_id' => 'PV-9999-999', 'reason' => 'Project not found.']], $res->json('skipped'));
     }
@@ -573,22 +573,37 @@ class CnsWorkbookRulesTest extends TestCase
         $this->assertSame(round($o->invoiceAmount() - 301000, 2), $o->outstanding());
     }
 
-    // ── Text is kept exactly as entered ────────────────────────────────
+    // ── Customer and project are upper case; other text is kept as entered ──
 
-    public function test_typed_text_keeps_its_exact_casing_in_records_messages_and_statements(): void
+    public function test_customer_and_project_are_saved_upper_case_and_other_text_keeps_its_casing(): void
     {
-        $this->createOrder(['customer' => 'Anand rao & Sons', 'project' => 'Lake House – Block B', 'remarks' => 'call after 5pm, ask for Mr. D\'Souza',
+        $this->createOrder(['customer' => 'Anand rao & Sons', 'project' => 'Lake House – Block B', 'email' => 'Anand.Rao@Example.com', 'remarks' => 'call after 5pm, ask for Mr. D\'Souza',
             'receipts' => [['date' => '2026-10-02', 'amount' => 50000, 'notes' => 'Advance via NEFT ref aBc123']]])->assertCreated()
-            ->assertJsonPath('data.customer', 'Anand rao & Sons')
-            ->assertJsonPath('data.project', 'Lake House – Block B')
+            ->assertJsonPath('data.customer', 'ANAND RAO & SONS')
+            ->assertJsonPath('data.project', 'LAKE HOUSE – BLOCK B')
+            ->assertJsonPath('data.email', 'Anand.Rao@Example.com')
+            ->assertJsonPath('data.remarks', 'call after 5pm, ask for Mr. D\'Souza')
             ->assertJsonPath('data.receipts.0.notes', 'Advance via NEFT ref aBc123');
         $this->update('PV-2610-001', ['customer' => 'anand RAO & sons', 'project' => 'Lake House – Block B', 'receipts' => [['date' => '2026-10-02', 'amount' => 50000, 'notes' => 'Advance via NEFT ref aBc123']]])
-            ->assertOk()->assertJsonPath('data.customer', 'anand RAO & sons');
-        $this->assertSame('anand RAO & sons', Order::first()->customer);
+            ->assertOk()->assertJsonPath('data.customer', 'ANAND RAO & SONS');
+        $this->assertSame('ANAND RAO & SONS', Order::first()->customer);
+        $this->assertSame('LAKE HOUSE – BLOCK B', Order::first()->project);
         $st = $this->withToken($this->token)->postJson('/api/admin/order-management/receivables/statements', ['ids' => ['PV-2610-001']])->json('statements.0');
-        $this->assertStringStartsWith("Dear anand RAO & sons,\n", $st['draft']['text']);           // no title case
-        $this->assertStringContainsString('Lake House – Block B (Project ID: PV-2610-001)', $st['draft']['text']);
+        $this->assertStringStartsWith("Dear ANAND RAO & SONS,\n", $st['draft']['text']);
+        $this->assertStringContainsString('LAKE HOUSE – BLOCK B (Project ID: PV-2610-001)', $st['draft']['text']);
         $this->assertSame('Advance via NEFT ref aBc123', $st['ledger'][1]['details']);
+    }
+
+    public function test_an_older_mixed_case_record_is_shown_upper_case_but_not_rewritten(): void
+    {
+        $this->createOrder()->assertCreated();
+        Order::query()->update(['customer' => 'Malika Enterprises', 'project' => 'Prestige Villa']); // as saved before the change
+        $this->withToken($this->token)->getJson('/api/admin/order-management/data')->assertOk()
+            ->assertJsonPath('orders.0.customer', 'MALIKA ENTERPRISES')
+            ->assertJsonPath('orders.0.project', 'PRESTIGE VILLA');
+        $this->withToken($this->token)->getJson('/api/admin/order-management/receivables')->assertOk()
+            ->assertJsonPath('data.0.customer', 'MALIKA ENTERPRISES');
+        $this->assertSame('Malika Enterprises', Order::first()->customer); // reading never changes the record
     }
 
     // ── Whole numbers ──────────────────────────────────────────────────

@@ -60,9 +60,11 @@ class WhatsappWebhookController extends Controller
         if ($messageId === '' || ! in_array($status, ['sent', 'delivered', 'read', 'failed'], true)) {
             return 0;
         }
-        $send = StatementSend::where('message_id', $messageId)->first();
+        // Payment statements, or an Action Hub ticket's "request received" message.
+        $send = StatementSend::where('message_id', $messageId)->first()
+            ?? \App\Models\ActionHub\Message::where('message_id', $messageId)->first();
         if (! $send) {
-            return 0; // not a payment statement (other WhatsApp messages)
+            return 0; // another WhatsApp message (alerts etc.)
         }
         // Statuses can arrive out of order: never move back (read stays read); failed is final.
         $current = $send->delivery_status;

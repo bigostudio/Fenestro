@@ -63,6 +63,56 @@ class WhatsappStatementApiTest extends TestCase
             'cns.whatsapp.statement_api.template' => $template]);
     }
 
+    // ── Receivables → Reminder (click-to-chat, nothing sent by the server) ──
+
+    public function test_reminders_use_each_customers_name_outstanding_balance_and_number_and_send_nothing(): void
+    {
+        Http::fake();
+        $this->order('PV-2610-001', 'NEHA KULKARNI', '98765 00001', [30000]);           // ₹1,18,000 − 30,000 = ₹88,000 due
+        $this->order('PV-2610-002', 'ARJUN SHETTY', '+91 98765 00002', [18000, 50000]); // ₹50,000 due
+
+        $res = $this->withToken($this->token)->postJson('/api/admin/order-management/receivables/reminders', ['ids' => ['PV-2610-001', 'PV-2610-002']])->assertOk();
+        $r = collect($res->json('reminders'))->keyBy('id');
+        $this->assertSame("Dear NEHA KULKARNI,\n\nGreetings!\n\nThis is a gentle reminder to kindly clear the pending balance amount of ₹88,000 at the earliest.\n\nThank you for your continued support and cooperation.\n\nThanks,\nPrestige Ventures – Customer Support\n(A uPVC Windows & Doors Manufacturing Company)", $r['PV-2610-001']['text']);
+        $this->assertSame('919876500001', $r['PV-2610-001']['phone']);
+        $this->assertNull($r['PV-2610-001']['problem']);
+        $this->assertStringContainsString('Dear ARJUN SHETTY,', $r['PV-2610-002']['text']);
+        $this->assertStringContainsString('amount of ₹50,000 at the earliest', $r['PV-2610-002']['text']);
+        $this->assertSame('919876500002', $r['PV-2610-002']['phone']);
+        $this->assertEquals(50000, $r['PV-2610-002']['outstanding']);
+        Http::assertNothingSent();
+        $this->assertSame(0, StatementSend::count());
+    }
+
+    public function test_reminders_refuse_missing_numbers_zero_balances_unknown_projects_and_demo_numbers(): void
+    {
+        $this->order('PV-2610-003', 'BAD NUMBER', '12345', [10000]);
+        $this->order('PV-2610-004', 'PAID UP', '9876500004', [118000]);
+        $this->order('PV-2610-099', '[DEMO] DEMO CUSTOMER', '9876500099', [10000]);
+        Order::where('code', 'PV-2610-099')->update(['code' => 'PV-DEMO-099']); // demo codes come from orders:demo, not the form
+
+        $r = collect($this->withToken($this->token)->postJson('/api/admin/order-management/receivables/reminders', ['ids' => ['PV-2610-003', 'PV-2610-004', 'PV-2610-404', 'PV-DEMO-099']])
+            ->assertOk()->json('reminders'))->keyBy('id');
+        $this->assertNull($r['PV-2610-003']['phone']);
+        $this->assertStringContainsString('No valid WhatsApp number', $r['PV-2610-003']['problem']);
+        $this->assertNull($r['PV-2610-004']['text']);
+        $this->assertStringContainsString('no outstanding balance', $r['PV-2610-004']['problem']);
+        $this->assertSame('Project not found.', $r['PV-2610-404']['problem']);
+        $this->assertNull($r['PV-DEMO-099']['phone']); // demo records never use the stored number
+        $this->assertStringContainsString('Demo record', $r['PV-DEMO-099']['problem']);
+
+        config(['cns.whatsapp.test_recipient' => '9999900001']); // testing: every reminder goes to the test number
+        $d = collect($this->withToken($this->token)->postJson('/api/admin/order-management/receivables/reminders', ['ids' => ['PV-DEMO-099']])->json('reminders'))->first();
+        $this->assertSame('919999900001', $d['phone']);
+        $this->assertTrue($d['test_recipient']);
+
+        $this->withToken($this->token)->postJson('/api/admin/order-management/receivables/reminders', ['ids' => []])->assertStatus(422);
+        $this->app['auth']->forgetGuards();
+        $this->app->forgetInstance('tymon.jwt');
+        $this->app->forgetInstance('tymon.jwt.auth');
+        $this->withoutToken()->postJson('/api/admin/order-management/receivables/reminders', ['ids' => ['PV-2610-003']])->assertStatus(401);
+    }
+
     public function test_without_credentials_nothing_is_sent_and_the_manual_fallback_is_explained(): void
     {
         config(['services.whatsapp.token' => null, 'services.whatsapp.phone_number_id' => null]);
@@ -177,6 +227,15 @@ class WhatsappStatementApiTest extends TestCase
         $this->assertStringContainsString('does not match project PV-2610-002', $res->json('message'));
         // Right ID but wrong customer name → refused as well.
         $this->send('PV-2610-002', $this->pdf('PV-2610-002', 'NEHA KULKARNI'))->assertStatus(422);
+        Http::assertNothingSent();
+    }
+
+    public function test_the_proper_case_name_printed_in_the_pdf_still_matches_the_upper_case_record(): void
+    {
+        Http::fake(); // WhatsApp not configured: the request stops after the PDF checks
+        $this->order('PV-2610-001', 'NEHA KULKARNI', '9876500001', [30000]);
+        $this->send('PV-2610-001', $this->pdf('PV-2610-001', 'Neha Kulkarni'))->assertStatus(503)->assertJsonPath('configured', false);
+        $this->send('PV-2610-001', $this->pdf('PV-2610-001', 'Karthik Reddy'))->assertStatus(422);
         Http::assertNothingSent();
     }
 

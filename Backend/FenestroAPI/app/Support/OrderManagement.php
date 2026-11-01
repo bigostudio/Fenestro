@@ -134,6 +134,20 @@ final class OrderManagement
     }
 
     /**
+     * Payment reminder (Receivables → Reminder) for a project with money due. Same
+     * recipient rules as every draft (test number → none for demo orders → the
+     * customer's valid number). Nothing is sent; the admin presses Send in WhatsApp.
+     */
+    public static function reminderDraft(\App\Models\OrderManagement\Order $order): array
+    {
+        return self::buildDraft($order, (string) config('cns.whatsapp.reminder_template')) + [
+            'status_key'   => 'reminder',
+            'status_label' => 'PAYMENT REMINDER',
+            'value'        => self::rupees($order->outstanding()),
+        ];
+    }
+
+    /**
      * Fill a template from the order. If any placeholder has no value, no
      * text or link is produced — 'missing' says what to add instead, so a
      * customer never receives "undefined", "null" or a guessed value.
@@ -155,7 +169,7 @@ final class OrderManagement
         if ($missing) {
             return [
                 'order_id'       => $order->code,
-                'customer'       => $order->customer,
+                'customer'       => self::upper($order->customer),
                 'text'           => null,
                 'phone'          => null,
                 'url'            => null,
@@ -166,7 +180,37 @@ final class OrderManagement
             ];
         }
 
-        return self::addressDraft($order, strtr($template, $values)) + ['missing' => []];
+        return self::addressDraft($order, self::withSignature(strtr($template, $values))) + ['missing' => []];
+    }
+
+    /**
+     * Close a WhatsApp message with the company signature (cns.whatsapp.signature),
+     * exactly once. An older sign-off at the end ("Regards,\nPrestige Ventures – …")
+     * is replaced so a customised template never ends with two sign-offs.
+     */
+    public static function withSignature(string $text): string
+    {
+        $signature = trim((string) config('cns.whatsapp.signature'));
+        $text = rtrim($text);
+        if ($signature === '') {
+            return $text;
+        }
+        $flat = fn (string $v) => preg_replace('/\s+/u', ' ', $v);
+        if (str_contains($flat($text), $flat($signature))) {
+            return $text;
+        }
+        $text = preg_replace('/\n+(?:(?:Regards|Warm regards|Best regards|Thanks|Thank you)[!,.]?\n)?Prestige Ventures\b[^\n]*$/u', '', $text);
+
+        return rtrim($text)."\n\n".$signature;
+    }
+
+    /**
+     * Customer and project text as the portal shows and saves it: upper case.
+     * Older records keep their stored text; this only formats what is shown.
+     */
+    public static function upper(?string $value): string
+    {
+        return mb_strtoupper(trim((string) $value));
     }
 
     /** @return array{0: ?string, 1: ?string} [value, problem-if-missing] */
@@ -227,7 +271,7 @@ final class OrderManagement
     {
         $draft = [
             'order_id'       => $order->code,
-            'customer'       => $order->customer,
+            'customer'       => self::upper($order->customer),
             'text'           => $text,
             'phone'          => null,
             'url'            => null,

@@ -26,7 +26,8 @@ class InventoryStockController extends Controller
         return [
             'code'      => ['required', 'string', 'max:100', 'not_regex:/[\/\\\\<>"\']/'],
             'item'      => array_filter([$isNew ? 'required' : 'nullable', 'string', 'max:255', 'not_regex:/[<>]/']),
-            'qty'       => ['required', 'integer', 'gt:0', 'max:'.self::MAX_QTY],
+            // A new profile code may start with an opening quantity of 0; adding stock needs more than 0.
+            'qty'       => ['required', 'integer', $isNew ? 'min:0' : 'gt:0', 'max:'.self::MAX_QTY],
             'unit'      => ['nullable', 'string', 'max:20', 'regex:/^[A-Za-z0-9 .\/-]+$/'],
             'date'      => ['nullable', 'date_format:Y-m-d', 'after_or_equal:2000-01-01', 'before_or_equal:'.now('Asia/Kolkata')->toDateString()],
             'reference' => ['nullable', 'string', 'max:255', 'not_regex:/[<>]/'],
@@ -39,6 +40,7 @@ class InventoryStockController extends Controller
     {
         return [
             'qty.gt'              => 'Quantity must be greater than zero.',
+            'qty.min'             => 'Opening quantity cannot be negative.',
             'qty.required'        => 'Quantity is required.',
             'qty.numeric'         => 'Quantity must be a number.',
             'qty.integer'         => 'Quantity must be a whole number.',
@@ -172,7 +174,9 @@ class InventoryStockController extends Controller
                         'code' => $row['code'], 'item' => $row['item'], 'unit' => $row['unit'] ?? null,
                         'base_stock' => 0, 'stock' => 0, 'unit_cost' => $row['unitCost'] ?? 0, 'updated_by' => $userId,
                     ]);
-                    $this->addToProfile($profile, $row, 'create', $userId);
+                    if ((float) $row['qty'] > 0) { // opening quantity 0: nothing received, so no stock movement
+                        $this->addToProfile($profile, $row, 'create', $userId);
+                    }
                 } else {
                     $profile = $this->findProfile($row['code']);
                     $this->addToProfile($profile, $row, 'bulk', $userId);

@@ -1,16 +1,19 @@
 <?php
 
 use App\Http\Controllers\WhatsappWebhookController;
+use App\Http\Controllers\Admin\ActionHubController;
 use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\Admin\ArchiveController;
 use App\Http\Controllers\Admin\InventoryStockController;
 use App\Http\Controllers\Admin\ReceivablesController;
 use App\Http\Controllers\Admin\OrderManagementController;
 use App\Http\Controllers\Admin\PartnerController;
+use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Auth\AdminAuthController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\LeadController;
 use App\Http\Controllers\MeasurementController;
+use App\Support\AdminReports;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -65,6 +68,24 @@ Route::middleware(['auth:api', 'admin'])->prefix('admin')->group(function () {
     Route::patch('/users/{user}/phone', [AdminUserController::class, 'updatePhone']); // any admin's mobile number, incl. your own
     Route::put('/profile',          [AdminUserController::class, 'updateProfile']);
     Route::put('/profile/password', [AdminUserController::class, 'updatePassword'])->middleware('throttle:6,1');
+
+    // Export report (PDF / Excel drawn in the browser from this read-only data)
+    Route::get('/reports/{type}', [ReportController::class, 'show'])
+        ->whereIn('type', AdminReports::TYPES)
+        ->middleware('throttle:30,1,reports'); // own counter, not shared with other limited routes
+
+    // Workspace → Action Hub (appointments; every save is audited in action_hub_events)
+    Route::prefix('action-hub')->middleware('throttle:120,1,action-hub')->group(function () {
+        Route::get('/actions',                  [ActionHubController::class, 'index']);
+        Route::post('/actions',                 [ActionHubController::class, 'store']);
+        Route::put('/actions/{action}',         [ActionHubController::class, 'update'])->whereNumber('action');
+        Route::get('/actions/{action}/history', [ActionHubController::class, 'history'])->whereNumber('action');
+        Route::get('/actions/{action}/whatsapp',  [ActionHubController::class, 'whatsappPreview'])->whereNumber('action'); // sends nothing
+        Route::post('/actions/{action}/whatsapp', [ActionHubController::class, 'sendWhatsapp'])->whereNumber('action');
+        Route::post('/actions/{action}/ticket',   [ActionHubController::class, 'createTicket'])->whereNumber('action'); // older eligible actions; sends nothing
+        Route::post('/holidays',                [ActionHubController::class, 'storeHoliday']);
+        Route::delete('/holidays/{holiday}',    [ActionHubController::class, 'destroyHoliday'])->whereNumber('holiday');
+    });
 });
 
 /*
@@ -80,6 +101,9 @@ Route::middleware(['auth:api', 'admin'])->prefix('admin/order-management')->grou
 
     Route::post('/inventory',       [OrderManagementController::class, 'storeInventory']);
     Route::put('/inventory/{code}', [OrderManagementController::class, 'updateInventory']);
+    // Delete Profile Code: only codes with no project usage and no stock history (confirmed by typing the code).
+    Route::get('/inventory/{code}/delete-check', [OrderManagementController::class, 'inventoryDeleteCheck']);
+    Route::delete('/inventory/{code}',           [OrderManagementController::class, 'destroyInventory']);
 
     Route::post('/orders/{code}/installation-date', [OrderManagementController::class, 'setInstallationDate']);
     Route::get('/orders/{code}/abort-summary',      [OrderManagementController::class, 'abortSummary']);
@@ -94,6 +118,7 @@ Route::middleware(['auth:api', 'admin'])->prefix('admin/order-management')->grou
     // Receivables (read-only) and payment statements
     Route::get('/receivables',              [ReceivablesController::class, 'index']);
     Route::post('/receivables/statements',  [ReceivablesController::class, 'statements']);
+    Route::post('/receivables/reminders',   [ReceivablesController::class, 'reminders']); // read-only: messages to send by hand
     Route::post('/receivables/statements/{code}/whatsapp', [ReceivablesController::class, 'sendStatement']);
     Route::get('/whatsapp/status',          [ReceivablesController::class, 'whatsappStatus']);
     Route::post('/receivables/statements/deliveries', [ReceivablesController::class, 'deliveries']);

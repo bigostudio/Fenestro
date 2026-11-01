@@ -239,8 +239,8 @@ class Order extends Model
 
         return [
             'id'              => $this->code,
-            'customer'        => $this->customer,
-            'project'         => $this->project,
+            'customer'        => OrderManagement::upper($this->customer),
+            'project'         => OrderManagement::upper($this->project),
             'phone'           => $this->phone ?? '',
             'email'           => $this->email ?? '',
             'gstin'           => $this->gstin ?? '', // customer GSTIN (optional)
@@ -314,13 +314,19 @@ class Order extends Model
         return $this->isAborted() || ($this->isCompleted() && $this->outstanding() <= 0);
     }
 
+    /** Shown in Receivables: money still due and not archived. */
+    public function isReceivable(): bool
+    {
+        return $this->outstanding() > 0 && ! $this->isArchived();
+    }
+
     /** Shape used by the dashboard's `orders` array. */
     public function toDashboard(): array
     {
         $data = [
             'id'         => $this->code,
-            'customer'   => $this->customer,
-            'project'    => $this->project,
+            'customer'   => OrderManagement::upper($this->customer), // shown in upper case; stored text unchanged
+            'project'    => OrderManagement::upper($this->project),
             'phone'      => $this->phone ?? '',
             'email'      => $this->email ?? '',
             'gstin'      => $this->gstin ?? '',

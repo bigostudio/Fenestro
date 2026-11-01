@@ -246,7 +246,7 @@ class OrderManagementController extends Controller
         $b = $this->deleteBlockers($order);
 
         return response()->json(['data' => [
-            'id' => $order->code, 'customer' => $order->customer, 'project' => $order->project,
+            'id' => $order->code, 'customer' => OrderManagement::upper($order->customer), 'project' => OrderManagement::upper($order->project),
             'status' => $order->projectStatusLabel(), 'deletable' => $b['reasons'] === [], 'reasons' => $b['reasons'], 'counts' => $b['counts'],
         ]]);
     }
@@ -282,8 +282,8 @@ class OrderManagementController extends Controller
     {
         return [
             'id'            => $order->code,
-            'customer'      => $order->customer,
-            'project'       => $order->project,
+            'customer'      => OrderManagement::upper($order->customer),
+            'project'       => OrderManagement::upper($order->project),
             'invoice'       => $order->invoiceAmount(),
             'payments'      => $order->paymentsAmount(),   // total received, before refunds
             'refunded'      => $order->refundedAmount(),   // previous refunds
@@ -392,8 +392,8 @@ class OrderManagementController extends Controller
         }
 
         return [
-            'customer'         => $data['customer'],
-            'project'          => $data['project'],
+            'customer'         => OrderManagement::upper($data['customer']), // saved in upper case, like the form shows it
+            'project'          => OrderManagement::upper($data['project']),
             'phone'            => $data['phone'] ?? null,
             // Not sent (older dashboard) → keep the saved email.
             'email'            => array_key_exists('email', $data) ? (trim((string) $data['email']) ?: null) : $existing?->email,
@@ -482,6 +482,11 @@ class OrderManagementController extends Controller
     {
         $data = $this->validateInventory($request, true);
         $this->checkWholeQuantities($data, null);
+        // Opening stock (base stock) of a new profile code: 0 or more (0 is a valid quantity).
+        // The current balance ('stock') may still be negative through project usage (shortages).
+        if ((float) ($data['baseStock'] ?? $data['stock']) < 0) {
+            throw ValidationException::withMessages(['stock' => 'Opening stock must be a whole number (0 or more).']);
+        }
 
         $profile = DB::transaction(function () use ($data, $request) {
             $profile = InventoryProfile::create($this->inventoryAttributes($data) + [
@@ -509,6 +514,62 @@ class OrderManagementController extends Controller
         });
 
         return response()->json(['data' => $profile->fresh('usages')->toDashboard()]);
+    }
+
+    /**
+     * Delete Profile Code. A code that is used on a project or has stock transactions
+     * (Add Stock / Bulk Data history) is kept, so project usage, shortages and the
+     * stock history are never corrupted. A remaining stock balance is only a warning.
+     */
+    private function profileDeleteBlockers(InventoryProfile $profile): array
+    {
+        $used = $profile->usages->filter(fn ($u) => (float) $u->qty > 0);
+        $movements = $profile->movements()->count();
+        $reasons = [];
+        if ($used->isNotEmpty()) {
+            $reasons[] = 'used on '.$used->count().' project'.($used->count() === 1 ? '' : 's').' ('.$used->pluck('usage_key')->take(5)->implode(', ').($used->count() > 5 ? ', …' : '').')';
+        }
+        if ($movements > 0) {
+            $reasons[] = $movements.' stock transaction'.($movements === 1 ? '' : 's').' recorded (Add Stock / Bulk Data history)';
+        }
+        $current = round($profile->base_stock - $profile->usages->sum(fn ($u) => max(0, (float) $u->qty)), 3);
+
+        return ['reasons' => $reasons, 'current' => $current, 'warnings' => $current != 0 ? ['Its current stock of '.rtrim(rtrim(number_format($current, 3, '.', ''), '0'), '.').' will no longer be listed.'] : []];
+    }
+
+    public function inventoryDeleteCheck(string $code): JsonResponse
+    {
+        $profile = InventoryProfile::with('usages')->where('code', $code)->firstOrFail();
+        $b = $this->profileDeleteBlockers($profile);
+
+        return response()->json(['data' => [
+            'code' => $profile->code, 'item' => $profile->item, 'current_stock' => $b['current'],
+            'deletable' => $b['reasons'] === [], 'reasons' => $b['reasons'], 'warnings' => $b['warnings'],
+        ]]);
+    }
+
+    /** Deletes a profile code with no project usage and no stock history. The admin must type the code to confirm. */
+    public function destroyInventory(Request $request, string $code): JsonResponse
+    {
+        $request->validate(['confirm' => 'required|string'], ['confirm.required' => 'Type the profile code to confirm.']);
+        if (mb_strtoupper(trim((string) $request->input('confirm'))) !== mb_strtoupper($code)) {
+            throw ValidationException::withMessages(['confirm' => 'Type the profile code exactly ('.$code.') to confirm.']);
+        }
+
+        return DB::transaction(function () use ($code, $request) {
+            $profile = InventoryProfile::with('usages')->where('code', $code)->lockForUpdate()->firstOrFail();
+            $b = $this->profileDeleteBlockers($profile);
+            if ($b['reasons'] !== []) {
+                return response()->json([
+                    'message' => 'This profile code cannot be deleted: '.implode('; ', $b['reasons']).'. Its usage and stock history must be kept.',
+                    'reasons' => $b['reasons'],
+                ], 409);
+            }
+            \Illuminate\Support\Facades\Log::info('Order Management: profile code deleted', ['code' => $profile->code, 'item' => $profile->item, 'stock' => $b['current'], 'by' => $request->user()->id]);
+            $profile->delete(); // only zero-quantity usage rows can remain; they cascade
+
+            return response()->json(['deleted' => $code]);
+        });
     }
 
     /** Stock and usage quantities are whole numbers; a value already stored on the profile may be kept. */

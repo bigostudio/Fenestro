@@ -17,3 +17,10 @@ Schedule::command('cns:reset-communication')
     ->hourlyAt(5)
     ->timezone(config('cns.comm_reset.timezone', 'Asia/Kolkata'))
     ->withoutOverlapping();
+
+// Action Hub: Get Ready (two working days before) and Delayed (overdue) are
+// applied by the server every 5 minutes, and whenever the page loads data.
+// Idempotent. Uses the same scheduler cron as above.
+Schedule::command('action-hub:refresh-statuses')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();

@@ -10,12 +10,22 @@ use Illuminate\Http\Request;
 
 class AuthController extends Controller
 {
+    /**
+     * One answer for a number with no account AND for a number whose account is not a referral
+     * partner (e.g. an admin): OTP login is for partners only, and the same text for both never
+     * reveals which numbers belong to staff. It tells staff where they do sign in.
+     */
+    private const NOT_A_PARTNER = 'This number is not registered as a referral partner. Please register first. Prestige Ventures staff sign in at Admin Login (/admin/login).';
+
     public function register(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'name'    => 'required|string|max:255',
             'phone'   => 'required|digits:10|unique:users,phone',
             'company' => 'nullable|string|max:255',
+        ], [
+            // One account per number (partner or staff). Same text whichever kind of account has it.
+            'phone.unique' => 'This number is already registered. Partners: use Login to sign in with an OTP. Prestige Ventures staff: sign in at Admin Login (/admin/login).',
         ]);
 
         $user = User::create([
@@ -45,7 +55,7 @@ class AuthController extends Controller
         $user = User::where('phone', $request->phone)->where('role', 'referral_partner')->first();
 
         if (! $user) {
-            return response()->json(['message' => 'Phone number not registered.'], 404);
+            return response()->json(['message' => self::NOT_A_PARTNER], 404);
         }
 
         if ($user->role === 'referral_partner') {
@@ -85,7 +95,7 @@ class AuthController extends Controller
         $user = User::where('phone', $request->phone)->where('role', 'referral_partner')->first();
 
         if (! $user) {
-            return response()->json(['message' => 'Phone number not registered.'], 404);
+            return response()->json(['message' => self::NOT_A_PARTNER], 404);
         }
 
         // Only approved partners may sign in (same answers as send-otp).
