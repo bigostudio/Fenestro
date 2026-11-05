@@ -45,6 +45,10 @@ return [
         'api_version'       => env('WHATSAPP_API_VERSION', 'v21.0'),
         // WhatsApp Business Account ID (optional; lets the connection check confirm the statement template).
         'business_account_id' => env('WHATSAPP_BUSINESS_ACCOUNT_ID'),
+        // Partner login codes: an approved template of category AUTHENTICATION with a
+        // copy-code button. Without it, production refuses to claim a code was sent.
+        'otp_template'      => env('WHATSAPP_OTP_TEMPLATE'),
+        'otp_template_lang' => env('WHATSAPP_OTP_TEMPLATE_LANG', 'en'),
         // Graph API host. Only changed for local testing against a fake server.
         'api_base'          => env('WHATSAPP_API_BASE', 'https://graph.facebook.com'),
         // Webhook (delivery statuses): verify token you choose in the Meta app's

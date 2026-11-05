@@ -133,6 +133,62 @@ class WhatsAppService
         }
     }
 
+    /**
+     * Partner login codes can be sent only when sending is switched on, the credentials are set
+     * and an approved Authentication template is named (WHATSAPP_OTP_TEMPLATE).
+     */
+    public function canSendOtp(): bool
+    {
+        return $this->isEnabled() && (string) config('services.whatsapp.otp_template') !== '';
+    }
+
+    /**
+     * Send a one-time login code with the approved Authentication template
+     * (body {{1}} = code, plus the template's copy-code button, which also takes the code).
+     * The code is never written to the log — only the masked number and the outcome.
+     *
+     * Returns ['accepted' => bool, 'message_id' => ?string, 'error' => ?string].
+     */
+    public function sendOtpCode(string $to, string $code): array
+    {
+        if (! $this->canSendOtp()) {
+            return ['accepted' => false, 'message_id' => null, 'error' => 'WhatsApp OTP delivery is not set up on this server.'];
+        }
+        $to = $this->formatPhone($to);
+        $masked = self::mask($to);
+        $template = (string) config('services.whatsapp.otp_template');
+        $param = [['type' => 'text', 'text' => $code]];
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'recipient_type'    => 'individual',
+            'to'                => $to,
+            'type'              => 'template',
+            'template'          => [
+                'name'       => $template,
+                'language'   => ['code' => (string) config('services.whatsapp.otp_template_lang', 'en')],
+                'components' => [
+                    ['type' => 'body', 'parameters' => $param],
+                    ['type' => 'button', 'sub_type' => 'url', 'index' => '0', 'parameters' => $param],
+                ],
+            ],
+        ];
+
+        try {
+            $sent = Http::withToken($this->token)->timeout(15)->post($this->baseUrl, $payload);
+            $messageId = $sent->json('messages.0.id');
+            if (! $sent->successful() || ! $messageId) {
+                return $this->failure('login code', $masked, $sent);
+            }
+            Log::channel('stack')->info('WhatsApp login code accepted', ['to' => $masked, 'message_id' => $messageId, 'template' => $template]);
+
+            return ['accepted' => true, 'message_id' => $messageId, 'error' => null];
+        } catch (\Throwable $e) {
+            Log::error('WhatsApp login code send failed', ['to' => $masked, 'error' => $e::class]);
+
+            return ['accepted' => false, 'message_id' => null, 'error' => 'Could not reach the WhatsApp Cloud API.'];
+        }
+    }
+
     /** "919876543210" → "9198******10" (for logs and records). */
     public static function mask(string $phone): string
     {

@@ -16,6 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin'             => \App\Http\Middleware\AdminMiddleware::class,
             'internal'          => \App\Http\Middleware\InternalAccessMiddleware::class,
             'approved_partner'  => \App\Http\Middleware\ApprovedPartnerMiddleware::class,
+            'partner_session'   => \App\Http\Middleware\EnsureTemporaryAccessIsLive::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

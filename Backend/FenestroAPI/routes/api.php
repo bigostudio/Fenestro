@@ -5,8 +5,11 @@ use App\Http\Controllers\Admin\ActionHubController;
 use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\Admin\ArchiveController;
 use App\Http\Controllers\Admin\InventoryStockController;
+use App\Http\Controllers\Admin\LeadController as AdminLeadController;
 use App\Http\Controllers\Admin\ReceivablesController;
 use App\Http\Controllers\Admin\OrderManagementController;
+use App\Http\Controllers\Admin\PartnerApplicationController;
+use App\Http\Controllers\Admin\PartnerCommonCodeController;
 use App\Http\Controllers\Admin\PartnerController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Auth\AdminAuthController;
@@ -43,7 +46,8 @@ Route::prefix('admin/auth')->group(function () {
 | Auth Routes (Protected)
 |--------------------------------------------------------------------------
 */
-Route::middleware('auth:api')->prefix('auth')->group(function () {
+// partner_session: a session opened with a temporary access code ends when that code is revoked.
+Route::middleware(['auth:api', 'partner_session'])->prefix('auth')->group(function () {
     Route::post('/logout',  [AuthController::class, 'logout']);
     Route::get('/me',       [AuthController::class, 'me']);
     Route::post('/refresh', [AuthController::class, 'refresh']);
@@ -58,6 +62,13 @@ Route::middleware(['auth:api', 'admin'])->prefix('admin')->group(function () {
     Route::get('/partners/approved',         [PartnerController::class, 'approved']);
     Route::get('/partners/pending',          [PartnerController::class, 'pending']);
     Route::patch('/partners/{user}/status', [PartnerController::class, 'updateStatus']);
+    // ONE common partner access code for all approved partners (shown once on generation; stored hashed).
+    Route::get('/partner-common-code',    [PartnerCommonCodeController::class, 'show']);
+    Route::post('/partner-common-code',   [PartnerCommonCodeController::class, 'store'])->middleware('throttle:10,1,partner-common-code');
+    Route::delete('/partner-common-code', [PartnerCommonCodeController::class, 'destroy']);
+    // The signed-in administrator's own referral-partner application (same account and number).
+    Route::get('/partner-application',  [PartnerApplicationController::class, 'show']);
+    Route::post('/partner-application', [PartnerApplicationController::class, 'store'])->middleware('throttle:10,1,partner-application');
 
     Route::get('/measurements',              [MeasurementController::class, 'index']);
 
@@ -73,6 +84,17 @@ Route::middleware(['auth:api', 'admin'])->prefix('admin')->group(function () {
     Route::get('/reports/{type}', [ReportController::class, 'show'])
         ->whereIn('type', AdminReports::TYPES)
         ->middleware('throttle:30,1,reports'); // own counter, not shared with other limited routes
+
+    // Fenestro → Leads (14 statuses, RAG, Lead IDs, assignment, scheduling, WhatsApp drafts; history in lead_events)
+    Route::prefix('leads')->middleware('throttle:120,1,admin-leads')->group(function () {
+        Route::get('/config',            [AdminLeadController::class, 'config']);
+        Route::get('/',                  [AdminLeadController::class, 'index']);
+        Route::post('/',                 [AdminLeadController::class, 'store']);
+        Route::get('/{lead}',            [AdminLeadController::class, 'show'])->whereNumber('lead');
+        Route::put('/{lead}',            [AdminLeadController::class, 'update'])->whereNumber('lead');
+        Route::get('/{lead}/history',    [AdminLeadController::class, 'history'])->whereNumber('lead');
+        Route::post('/{lead}/whatsapp',  [AdminLeadController::class, 'whatsapp'])->whereNumber('lead');
+    });
 
     // Workspace → Action Hub (appointments; every save is audited in action_hub_events)
     Route::prefix('action-hub')->middleware('throttle:120,1,action-hub')->group(function () {
@@ -101,6 +123,8 @@ Route::middleware(['auth:api', 'admin'])->prefix('admin/order-management')->grou
 
     Route::post('/inventory',       [OrderManagementController::class, 'storeInventory']);
     Route::put('/inventory/{code}', [OrderManagementController::class, 'updateInventory']);
+    // Edit profile: code / item description / unit only (never stock, cost or usage).
+    Route::put('/inventory/{code}/profile', [OrderManagementController::class, 'updateInventoryProfile']);
     // Delete Profile Code: only codes with no project usage and no stock history (confirmed by typing the code).
     Route::get('/inventory/{code}/delete-check', [OrderManagementController::class, 'inventoryDeleteCheck']);
     Route::delete('/inventory/{code}',           [OrderManagementController::class, 'destroyInventory']);
@@ -136,12 +160,12 @@ Route::middleware(['auth:api', 'admin'])->prefix('admin/order-management')->grou
 */
 
 // Approved partner: submit a lead
-Route::middleware(['auth:api', 'approved_partner'])->group(function () {
+Route::middleware(['auth:api', 'partner_session', 'approved_partner'])->group(function () {
     Route::post('/leads', [LeadController::class, 'store']);
 });
 
 // Admin / internal team: view all leads; approved partner: view own leads
-Route::middleware(['auth:api'])->group(function () {
+Route::middleware(['auth:api', 'partner_session'])->group(function () {
     Route::get('/leads', [LeadController::class, 'index']);
 });
 

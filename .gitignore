@@ -1,0 +1,3 @@
+# The frontend is a separate repository (github.com/bigostudio/Fenestro-Client) that is checked
+# out inside this folder for convenience. It must never be added to this (backend) repository.
+/Fenestro-Client/

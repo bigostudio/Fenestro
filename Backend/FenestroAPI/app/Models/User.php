@@ -29,6 +29,8 @@ class User extends Authenticatable implements JWTSubject
         'password',
         'remember_token',
         'otp',
+        'otp_hash',
+        'otp_attempts',
     ];
 
     protected function casts(): array

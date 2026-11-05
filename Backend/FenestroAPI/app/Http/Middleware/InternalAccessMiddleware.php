@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Support\PartnerAccount;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -12,7 +13,8 @@ class InternalAccessMiddleware
     {
         $user = auth('api')->user();
 
-        if (! $user || (! $user->isAdmin() && ! $user->isInternalTeam())) {
+        // Partner-login sessions (including a dual-role admin's) never get internal access.
+        if (! $user || PartnerAccount::isPartnerSession() || (! $user->isAdmin() && ! $user->isInternalTeam())) {
             return response()->json(['message' => 'Unauthorized. Internal access required.'], 403);
         }
 

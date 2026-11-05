@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\PartnerAccount;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -41,6 +42,8 @@ class AdminAuthController extends Controller
             return response()->json(['message' => self::INVALID_CREDENTIALS], 401);
         }
 
+        // An admin token never carries partner-session claims (see PartnerAccount::resetTokenClaims).
+        PartnerAccount::resetTokenClaims();
         $token = auth('api')->login($user);
 
         return response()->json([

@@ -42,6 +42,8 @@ class AppServiceProvider extends ServiceProvider
         $otpTooMany = fn () => response()->json(['message' => 'Too many attempts. Please wait a minute and try again.'], 429);
         RateLimiter::for('partner-send-otp', fn (Request $request) => [
             Limit::perMinute(5)->by('send-otp:'.$request->input('phone'))->response($otpTooMany),
+            // Each code is a paid WhatsApp message: cap codes per number per hour as well.
+            Limit::perHour(10)->by('send-otp-hour:'.$request->input('phone'))->response($otpTooMany),
             Limit::perMinute(30)->by('send-otp-ip:'.$request->ip())->response($otpTooMany),
         ]);
         RateLimiter::for('partner-verify-otp', fn (Request $request) => [

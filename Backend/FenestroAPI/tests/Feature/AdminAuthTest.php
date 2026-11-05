@@ -10,6 +10,7 @@ use Tests\TestCase;
 class AdminAuthTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\FakesWhatsappOtp;
 
     private const PASSWORD = 'Correct-Horse-9!';
 
@@ -159,8 +160,9 @@ class AdminAuthTest extends TestCase
     {
         User::create(['name' => 'Partner', 'phone' => '9000000005', 'role' => 'referral_partner', 'is_active' => 1]);
 
+        $this->fakeWhatsappOtp();
         $this->postJson('/api/auth/send-otp', ['phone' => '9000000005'])->assertOk();
-        $otp = User::where('phone', '9000000005')->value('otp');
+        $otp = $this->sentOtpCode();
 
         $this->postJson('/api/auth/verify-otp', ['phone' => '9000000005', 'otp' => $otp])
             ->assertOk()
@@ -176,9 +178,10 @@ class AdminAuthTest extends TestCase
         try {
             $this->postJson('/api/auth/verify-otp', ['phone' => '9000000005', 'otp' => '123456'])
                 ->assertStatus(422)->assertJsonMissingPath('token');
-            // The real code still works in production.
+            // The real code still works in production (WhatsApp faked — nothing is sent).
+            $this->fakeWhatsappOtp();
             $this->postJson('/api/auth/send-otp', ['phone' => '9000000005'])->assertOk();
-            $otp = User::where('phone', '9000000005')->value('otp');
+            $otp = $this->sentOtpCode();
             $this->assertNotSame('123456', $otp);
             $this->postJson('/api/auth/verify-otp', ['phone' => '9000000005', 'otp' => $otp])->assertOk()->assertJsonPath('user.role', 'referral_partner');
         } finally {
@@ -189,8 +192,8 @@ class AdminAuthTest extends TestCase
     public function test_pending_and_rejected_partners_cannot_sign_in_even_with_a_valid_code(): void
     {
         foreach (['9000000006' => null, '9000000007' => 0] as $phone => $state) {
-            User::create(['name' => 'Partner', 'phone' => $phone, 'role' => 'referral_partner', 'is_active' => $state,
-                'otp' => '654321', 'otp_expires_at' => now()->addMinutes(5)]);
+            $partner = User::create(['name' => 'Partner', 'phone' => $phone, 'role' => 'referral_partner', 'is_active' => $state]);
+            \App\Support\PartnerOtp::issue($partner, '654321'); // a valid, unexpired code
             $this->postJson('/api/auth/verify-otp', ['phone' => $phone, 'otp' => '654321'])->assertForbidden()->assertJsonMissingPath('token');
             $this->postJson('/api/auth/verify-otp', ['phone' => $phone, 'otp' => '123456'])->assertForbidden()->assertJsonMissingPath('token');
         }

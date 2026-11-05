@@ -537,6 +537,68 @@ class OrderManagementController extends Controller
         return ['reasons' => $reasons, 'current' => $current, 'warnings' => $current != 0 ? ['Its current stock of '.rtrim(rtrim(number_format($current, 3, '.', ''), '0'), '.').' will no longer be listed.'] : []];
     }
 
+    /**
+     * Inventory → Edit profile: the profile-level fields only — profile code, item description and
+     * unit. Stock (opening/current), unit cost and project usage are NEVER read from or written by
+     * this request (they have their own actions: Add Stock, Set cost, Edit usage), so a profile edit
+     * cannot overwrite a stock or usage change made elsewhere.
+     *
+     * Renaming the code is safe for the data: project usage and stock history are linked by
+     * profile_id, and everything that shows the code (reports, archive, delete check) reads it live.
+     * Codes must stay unique, compared without regard to letter case (the dashboard matches codes
+     * that way); the database's unique index is the final guard against a concurrent rename.
+     */
+    public function updateInventoryProfile(Request $request, string $code): JsonResponse
+    {
+        $profile = InventoryProfile::where('code', $code)->firstOrFail();
+        $data = $request->validate([
+            // Same rules as when a profile is added (the code is used in URLs and the dashboard's handlers).
+            'code' => ['required', 'string', 'max:100', 'not_regex:/[\/\\\\<>"\']/'],
+            'item' => ['required', 'string', 'max:255', self::NO_HTML],
+            // Same rule as Add Stock / Bulk Data.
+            'unit' => ['nullable', 'string', 'max:20', 'regex:/^[A-Za-z0-9 .\/-]+$/'],
+        ], [
+            'code.required'  => 'Enter the profile code.',
+            'code.not_regex' => 'Profile codes cannot contain / \\ < > or quotes.',
+            'item.required'  => 'Enter the item description.',
+            'item.not_regex' => 'Item description cannot contain < or >.',
+            'unit.regex'     => 'Unit can use letters, numbers, spaces and . / - only.',
+        ]);
+        $newCode = trim($data['code']);
+        $item = trim($data['item']);
+        $unit = isset($data['unit']) && trim($data['unit']) !== '' ? trim($data['unit']) : null;
+        if ($newCode === '' || $item === '') {
+            throw ValidationException::withMessages([$newCode === '' ? 'code' : 'item' => $newCode === '' ? 'Enter the profile code.' : 'Enter the item description.']);
+        }
+
+        $duplicate = fn () => InventoryProfile::where('id', '!=', $profile->id)
+            ->whereRaw('LOWER(code) = ?', [mb_strtolower($newCode)])->exists();
+        if ($duplicate()) {
+            throw ValidationException::withMessages(['code' => 'That profile code already exists.']);
+        }
+
+        $previous = $profile->code;
+        try {
+            DB::transaction(function () use ($profile, $newCode, $item, $unit, $request, $duplicate) {
+                $profile = InventoryProfile::whereKey($profile->id)->lockForUpdate()->firstOrFail();
+                if ($duplicate()) {
+                    throw ValidationException::withMessages(['code' => 'That profile code already exists.']);
+                }
+                // Only these columns — never stock, base_stock, unit_cost or usage.
+                $profile->forceFill(['code' => $newCode, 'item' => $item, 'unit' => $unit, 'updated_by' => $request->user()->id])->save();
+            });
+        } catch (UniqueConstraintViolationException) {
+            throw ValidationException::withMessages(['code' => 'That profile code already exists.']);
+        }
+
+        $profile = InventoryProfile::with('usages')->findOrFail($profile->id);
+        if ($previous !== $profile->code) {
+            \Illuminate\Support\Facades\Log::info('Order Management: profile code renamed', ['from' => $previous, 'to' => $profile->code, 'by' => $request->user()->id]);
+        }
+
+        return response()->json(['data' => $profile->toDashboard(), 'previous_code' => $previous]);
+    }
+
     public function inventoryDeleteCheck(string $code): JsonResponse
     {
         $profile = InventoryProfile::with('usages')->where('code', $code)->firstOrFail();

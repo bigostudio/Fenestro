@@ -37,7 +37,7 @@ class AdminReports
         'inventory' => ['filter' => ['all', 'shortage', 'zero']],
         'receivables' => ['filter' => ['all', 'completed', 'active']],
         'partners' => ['status' => ['all', 'pending', 'approved', 'rejected']],
-        'leads' => ['status' => ['all', 'new', 'in_progress', 'completed']],
+        'leads' => ['status' => ['active', 'all', 'new', 'in_progress', 'measured', 'closed', 'archived']],
     ];
 
     /** Most stock movements listed in one Inventory report (newest first). */
@@ -500,7 +500,7 @@ class AdminReports
         $measurements = Measurement::query()->selectRaw('status, count(*) as n')->groupBy('status')->pluck('n', 'status');
         $byPartner = $leads->groupBy('referral_partner_id')->map(fn (Collection $g) => [
             'partner' => $g->first()->partner?->name ?? '—', 'company' => $g->first()->partner?->company ?? '',
-            'leads' => $g->count(), 'completed' => $g->filter(fn (Lead $l) => self::leadStatus($l) === 'completed')->count(),
+            'leads' => $g->count(), 'completed' => $g->filter(fn (Lead $l) => self::leadStatus($l) === 'measured')->count(),
         ])->sortByDesc('leads')->values();
         $count = fn (string $s) => $leads->filter(fn (Lead $l) => self::leadStatus($l) === $s)->count();
 
@@ -511,8 +511,10 @@ class AdminReports
             'summary' => [
                 self::stat('Total leads', $leads->count()),
                 self::stat('New leads', $count('new')),
-                self::stat('In progress (measured)', $count('in_progress')),
-                self::stat('Completed leads', $count('completed')),
+                self::stat('In progress', $count('in_progress')),
+                self::stat('Measured (full)', $count('measured')),
+                self::stat('Closed (no response)', $count('closed')),
+                self::stat('Archived (aborted)', $count('archived')),
                 self::stat('B2B leads', $leads->where('type', 'B2B')->count()),
                 self::stat('B2C leads', $leads->where('type', 'B2C')->count()),
                 self::stat('Leads in the last 7 days', $leads->filter(fn (Lead $l) => $l->created_at && $l->created_at->gte(now()->subDays(7)))->count()),
@@ -523,7 +525,7 @@ class AdminReports
             ],
             'sections' => [
                 self::section('Leads by partner', 'By partner', [
-                    self::col('partner', 'Partner'), self::col('company', 'Company'), self::col('leads', 'Leads', 'number'), self::col('completed', 'Completed', 'number'),
+                    self::col('partner', 'Partner'), self::col('company', 'Company'), self::col('leads', 'Leads', 'number'), self::col('completed', 'Measured', 'number'),
                 ], $byPartner->all(), ['leads' => $byPartner->sum('leads'), 'completed' => $byPartner->sum('completed')], 'No leads yet.'),
             ],
         ];
@@ -565,29 +567,41 @@ class AdminReports
 
     private static function leads(array $params): array
     {
-        $status = $params['status'] ?? 'all';
-        $leads = self::allLeads()->filter(fn (Lead $l) => $status === 'all' || self::leadStatus($l) === $status)->values();
-        $label = ['new' => 'New', 'in_progress' => 'In progress', 'completed' => 'Completed'];
+        $status = $params['status'] ?? 'active';
+        $label = ['active' => 'All active', 'new' => 'New', 'in_progress' => 'In progress', 'measured' => 'Measured (full)', 'closed' => 'Closed', 'archived' => 'Archived'];
+        $now = now();
+        $leads = self::allLeads()->filter(fn (Lead $l) => match ($status) {
+            'all' => true,
+            'active' => $l->lifecycle === LeadWorkflow::ACTIVE,
+            default => self::leadStatus($l) === $status,
+        })->values();
 
         return [
             'title' => 'Fenestro Leads Report',
-            'description' => 'Referred customer leads with partner and measurement status.',
-            'filters' => $status === 'all' ? [] : [['label' => 'Status', 'value' => $label[$status]]],
+            'description' => 'Customer leads with status, Red/Amber/Green, assignment and schedule.',
+            'filters' => $status === 'all' ? [] : [['label' => 'List', 'value' => $label[$status]]],
             'summary' => [
                 self::stat('Leads', $leads->count()),
-                ...array_map(fn ($k) => self::stat($label[$k], $leads->filter(fn (Lead $l) => self::leadStatus($l) === $k)->count()), array_keys($label)),
+                ...array_map(fn ($k) => self::stat($label[$k], $leads->filter(fn (Lead $l) => self::leadStatus($l) === $k)->count()), ['new', 'in_progress', 'measured', 'closed', 'archived']),
             ],
             'sections' => [
                 self::section('Leads', 'Leads', [
-                    self::col('date', 'Received', 'date'), self::col('client', 'Client'), self::col('phone', 'Phone'), self::col('type', 'Type'),
-                    self::col('partner', 'Partner'), self::col('status', 'Status'), self::col('notes', 'Notes', 'text', true),
-                ], $leads->map(fn (Lead $l) => [
-                    'date' => self::ymd($l->created_at), 'client' => $l->client_name, 'phone' => $l->client_phone ?? '', 'type' => $l->type ?? '',
-                    'partner' => trim(($l->partner?->name ?? '').($l->partner?->company ? ' ('.$l->partner->company.')' : '')) ?: '—',
-                    'status' => $label[self::leadStatus($l)], 'notes' => $l->notes ?? '',
-                ])->all(), null, 'No leads with this status.'),
+                    self::col('lead_no', 'Lead ID'), self::col('date', 'Received', 'date'), self::col('client', 'Client'), self::col('phone', 'Phone'), self::col('type', 'Type'),
+                    self::col('partner', 'Referred by'), self::col('assigned', 'Assigned to'), self::col('status', 'Status'), self::col('rag', 'RAG'),
+                    self::col('scheduled', 'Scheduled'), self::col('notes', 'Notes', 'text', true),
+                ], $leads->map(function (Lead $l) use ($now) {
+                    $rag = LeadWorkflow::rag($l, $now);
+
+                    return [
+                        'lead_no' => $l->lead_no ?? '', 'date' => self::ymd($l->created_at), 'client' => $l->client_name, 'phone' => $l->client_phone ?? '', 'type' => $l->type ?? '',
+                        'partner' => trim(($l->partner?->name ?? '').($l->partner?->company ? ' ('.$l->partner->company.')' : '')) ?: '—',
+                        'assigned' => $l->assigned_to ?? '—', 'status' => $l->status_code.' — '.LeadWorkflow::label($l->status_code),
+                        'rag' => ucfirst($rag['rag']).($rag['message'] ? ' — '.$rag['message'] : ''),
+                        'scheduled' => LeadWorkflow::local($l->scheduled_at, 'd M Y h:i A') ?? '', 'notes' => $l->notes ?? '',
+                    ];
+                })->all(), null, 'No leads in this list.'),
             ],
-            'notes' => ['Status comes from the lead\'s measurement: none = New, draft = In progress, submitted = Completed.'],
+            'notes' => ['Red/Amber/Green is calculated on the server from the stored dates (working days Monday–Friday, company holidays excluded).'],
         ];
     }
 
@@ -609,14 +623,10 @@ class AdminReports
         return Lead::with(['partner:id,name,company', 'measurement:id,lead_id,status'])->latest()->get();
     }
 
-    /** Lead status from its measurement: none = new, submitted = completed, otherwise in progress. */
+    /** Lead list: new / in_progress / measured (active), closed or archived (LeadWorkflow). */
     private static function leadStatus(Lead $lead): string
     {
-        if (! $lead->measurement) {
-            return 'new';
-        }
-
-        return $lead->measurement->status === 'submitted' ? 'completed' : 'in_progress';
+        return LeadWorkflow::tab($lead);
     }
 
     /** As on the Partners page: is_active null = pending, 1 = approved, otherwise rejected. */

@@ -14,6 +14,7 @@ use Tests\TestCase;
 class PartnerAuthPhoneTest extends TestCase
 {
     use RefreshDatabase;
+    use \Tests\Concerns\FakesWhatsappOtp;
 
     private const NOT_A_PARTNER = 'This number is not registered as a referral partner. Please register first. Prestige Ventures staff sign in at Admin Login (/admin/login).';
 
@@ -37,11 +38,12 @@ class PartnerAuthPhoneTest extends TestCase
         $this->postJson('/api/auth/send-otp', ['phone' => '9123400001'])->assertNotFound()->assertJsonPath('message', self::NOT_A_PARTNER);
         $this->postJson('/api/auth/send-otp', ['phone' => '9876501234'])->assertNotFound()->assertJsonPath('message', self::NOT_A_PARTNER);
         $this->postJson('/api/auth/verify-otp', ['phone' => '9123400001', 'otp' => '123456'])->assertNotFound();
-        $this->assertNull(User::where('phone', '9123400001')->value('otp')); // no OTP generated for the admin
+        $this->assertNull(User::where('phone', '9123400001')->value('otp_hash')); // no OTP generated for the admin
 
         // Registration: still blocked (one account per number), with an explanation that matches the login answer.
         $res = $this->postJson('/api/auth/register', ['name' => 'Someone', 'phone' => '9123400001'])->assertStatus(422);
-        $this->assertSame('This number is already registered. Partners: use Login to sign in with an OTP. Prestige Ventures staff: sign in at Admin Login (/admin/login).', $res->json('errors.phone.0'));
+        // (2026-11-04: also points staff to Settings → Partner Access to become a partner with the same account.)
+        $this->assertSame('This number is already registered. Partners: use Login to sign in with an OTP. Prestige Ventures staff: sign in at Admin Login (/admin/login); to also become a referral partner, use Settings → Partner Access there.', $res->json('errors.phone.0'));
         $this->assertSame(1, User::where('phone', '9123400001')->count());
         $this->assertSame('admin', User::where('phone', '9123400001')->value('role'));
     }
@@ -52,14 +54,17 @@ class PartnerAuthPhoneTest extends TestCase
         $this->postJson('/api/auth/send-otp', ['phone' => '9123400002'])->assertForbidden(); // pending approval
         User::where('phone', '9123400002')->update(['is_active' => 1]);
 
-        $this->postJson('/api/auth/send-otp', ['phone' => '9123400002'])->assertOk();
-        $otp = User::where('phone', '9123400002')->value('otp');
+        // Production only reports success when WhatsApp accepted the code (faked here — nothing is sent).
+        $this->fakeWhatsappOtp();
+        $this->postJson('/api/auth/send-otp', ['phone' => '9123400002'])->assertOk()->assertJsonPath('delivery', 'sent');
+        $otp = $this->sentOtpCode();
         $this->assertMatchesRegularExpression('/^\d{6}$/', $otp);
         if ($otp !== '123456') {
             $this->postJson('/api/auth/verify-otp', ['phone' => '9123400002', 'otp' => '123456'])->assertStatus(422); // no shortcut in production
         }
         $this->postJson('/api/auth/verify-otp', ['phone' => '9123400002', 'otp' => $otp])->assertOk()->assertJsonPath('user.role', 'referral_partner');
-        $this->assertNull(User::where('phone', '9123400002')->value('otp')); // single use
+        $this->assertNull(User::where('phone', '9123400002')->value('otp_hash')); // single use
+        $this->postJson('/api/auth/verify-otp', ['phone' => '9123400002', 'otp' => $otp])->assertStatus(422);
 
         $this->postJson('/api/auth/register', ['name' => 'Again', 'phone' => '9123400002'])->assertStatus(422)->assertJsonValidationErrors('phone');
         $this->assertSame(1, User::where('phone', '9123400002')->count());

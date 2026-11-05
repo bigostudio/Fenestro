@@ -15,6 +15,11 @@ return new class extends Migration
         DB::table('measurements')->truncate();
         Schema::enableForeignKeyConstraints();
 
+        // Drop the old index first: newer SQLite refuses to drop an indexed column.
+        Schema::table('measurements', function (Blueprint $table) {
+            $table->dropIndex(['lead_id']);
+        });
+
         Schema::table('measurements', function (Blueprint $table) {
             $table->dropColumn('lead_id');
         });

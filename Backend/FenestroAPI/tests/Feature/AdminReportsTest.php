@@ -226,10 +226,12 @@ class AdminReportsTest extends TestCase
         }
         $lead = Lead::first();
         Measurement::create(['lead_id' => $lead->id, 'customer_name' => 'X', 'customer_phone' => '9000000000', 'type' => 'B2B', 'measured_by' => 'Y', 'date' => '2026-10-01', 'status' => 'submitted']);
+        $lead->forceFill(['status_code' => 'MSRMT-FULL', 'measured_at' => '2026-10-01 06:30:00'])->save(); // lists follow the lead status (2026-11-03)
 
         $r = $this->report('leads')->assertOk()->json();
         $this->assertCount(18, self::section($r, 'Leads')['rows']); // the /leads list pages at 15
-        $this->assertCount(1, self::section($this->report('leads', ['status' => 'completed'])->json(), 'Leads')['rows']);
+        $this->assertCount(1, self::section($this->report('leads', ['status' => 'measured'])->json(), 'Leads')['rows']);
+        $this->report('leads', ['status' => 'completed'])->assertStatus(422); // old list name
 
         $partners = self::section($this->report('partners')->json(), 'Partners');
         $this->assertSame(18, $partners['rows'][0]['leads']);
