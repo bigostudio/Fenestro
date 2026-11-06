@@ -17,6 +17,12 @@ class MeasurementExport implements WithMultipleSheets
             return implode(' & ', $types) ?: 'Untyped';
         });
 
+        // A workbook needs at least one sheet: a measurement with no apertures yet (e.g. created
+        // from a lead before any opening was recorded) exports the column headings only.
+        if ($groups->isEmpty()) {
+            return [new ApertureGroupSheet('Apertures', collect())];
+        }
+
         return $groups->map(fn ($apertures, $sheetName) =>
             new ApertureGroupSheet($sheetName, $apertures)
         )->values()->toArray();
